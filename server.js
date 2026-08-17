@@ -10,22 +10,34 @@ app.use(express.static(path.join(__dirname, "public")));
 
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const BE_STUDIOS_LINKTREE = "https://linktr.ee/Be_Studios_Cyprus?utm_source=linktree_profile_share&ltsid=1a7ec7a4-e819-4579-8a89-fd847f7ae502";
+const ARBOX_SCHEDULE_URL = "https://arboxserver.arboxapp.com/api/public/v3/schedule";
 
 function cyprusToday() {
   return new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Nicosia", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
 }
 
 async function getArboxSchedule({ from_date, to_date }) {
-  const scheduleApiUrl = String(process.env.SCHEDULE_API_URL || "").trim();
-  if (!scheduleApiUrl) return { ok: false, error: "Live schedule is not configured yet. SCHEDULE_API_URL is missing." };
-  const url = new URL(scheduleApiUrl);
+  const apiKey = String(process.env.ARBOX_API_KEY || "").trim();
+  if (!apiKey) return { ok: false, error: "Live schedule is not configured yet. ARBOX_API_KEY is missing." };
+
+  const url = new URL(ARBOX_SCHEDULE_URL);
   url.searchParams.set("from_date", from_date);
   url.searchParams.set("to_date", to_date);
-  const response = await fetch(url, { method: "GET", headers: { Accept: "application/json" } });
+  url.searchParams.set("limit", "500");
+  url.searchParams.set("registration_count", "1");
+
+  const response = await fetch(url, {
+    method: "GET",
+    headers: {
+      Accept: "application/json",
+      Authorization: apiKey
+    }
+  });
+
   const text = await response.text();
   let body;
   try { body = JSON.parse(text); } catch { body = text; }
-  if (!response.ok) return { ok: false, status: response.status, error: "Schedule request failed.", details: body };
+  if (!response.ok) return { ok: false, status: response.status, error: "Arbox schedule request failed.", details: body };
   return { ok: true, from_date, to_date, schedule: body };
 }
 
@@ -102,7 +114,6 @@ app.post("/api/chat", async (req, res) => {
     const content = [{ type: "input_text", text: latestText }];
     for (const image of images) if (typeof image === "string" && image.startsWith("data:image/")) content.push({ type: "input_image", image_url: image, detail: "high" });
 
-    // Every Create reply request starts a fresh Responses API session. We do not reuse a response ID from any previous user request.
     let response = await client.responses.create({
       model: process.env.OPENAI_MODEL || "gpt-5-mini",
       instructions: INSTRUCTIONS,
@@ -111,7 +122,6 @@ app.post("/api/chat", async (req, res) => {
       max_output_tokens: 300
     });
 
-    // previous_response_id is used only inside this single request if the model calls the live schedule tool.
     for (let round = 0; round < 3; round += 1) {
       const calls = (response.output || []).filter((item) => item.type === "function_call" && item.name === "get_schedule");
       if (calls.length === 0) break;
