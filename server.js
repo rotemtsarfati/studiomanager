@@ -30,7 +30,7 @@ async function getArboxSchedule({ from_date, to_date }) {
     method: "GET",
     headers: {
       Accept: "application/json",
-      Authorization: apiKey
+      "api-key": apiKey
     }
   });
 
