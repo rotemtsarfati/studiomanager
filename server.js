@@ -11,6 +11,7 @@ app.use(express.static(path.join(__dirname, "public")));
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const BE_STUDIOS_LINKTREE = "https://linktr.ee/Be_Studios_Cyprus?utm_source=linktree_profile_share&ltsid=1a7ec7a4-e819-4579-8a89-fd847f7ae502";
 const ARBOX_SCHEDULE_URL = "https://arboxserver.arboxapp.com/api/public/v3/schedule";
+const META_GRAPH_VERSION = process.env.META_GRAPH_VERSION || "v25.0";
 
 function cyprusToday() {
   return new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Nicosia", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
@@ -108,54 +109,130 @@ Never invent prices, memberships, policies, instructors, schedules, availability
 OUTPUT
 Return only the customer-ready reply. No analysis, labels, quotation marks, or internal notes.`;
 
-app.post("/api/chat", async (req, res) => {
-  try {
-    const message = String(req.body?.message || "").trim();
-    const images = Array.isArray(req.body?.images) ? req.body.images.slice(0, 6) : [];
-    const history = Array.isArray(req.body?.history) ? req.body.history.slice(-8) : [];
-    if (!message && images.length === 0) return res.status(400).json({ error: "Add a customer message or screenshot." });
+async function generateReply({ message = "", images = [], history = [] }) {
+  const cleanMessage = String(message || "").trim();
+  const cleanImages = Array.isArray(images) ? images.slice(0, 6) : [];
+  const cleanHistory = Array.isArray(history) ? history.slice(-8) : [];
+  if (!cleanMessage && cleanImages.length === 0) throw new Error("Add a customer message or screenshot.");
 
-    const historyText = history.length ? `Previous conversation:\n${history.map((item, i) => `Turn ${i + 1}\nCustomer: ${String(item.customer || "")}\nBe Studios: ${String(item.reply || "")}`).join("\n\n")}\n\n` : "";
-    const today = cyprusToday();
-    const latestText = message
-      ? `Today's date in Cyprus: ${today}.\n\n${historyText}Latest customer message:\n${message}\n\nDraft the next Be Studios reply.`
-      : `Today's date in Cyprus: ${today}.\n\n${historyText}Use the attached conversation screenshot(s) to identify the latest customer message and draft the next Be Studios reply.`;
+  const historyText = cleanHistory.length ? `Previous conversation:\n${cleanHistory.map((item, i) => `Turn ${i + 1}\nCustomer: ${String(item.customer || "")}\nBe Studios: ${String(item.reply || "")}`).join("\n\n")}\n\n` : "";
+  const today = cyprusToday();
+  const latestText = cleanMessage
+    ? `Today's date in Cyprus: ${today}.\n\n${historyText}Latest customer message:\n${cleanMessage}\n\nDraft the next Be Studios reply.`
+    : `Today's date in Cyprus: ${today}.\n\n${historyText}Use the attached conversation screenshot(s) to identify the latest customer message and draft the next Be Studios reply.`;
 
-    const content = [{ type: "input_text", text: latestText }];
-    for (const image of images) if (typeof image === "string" && image.startsWith("data:image/")) content.push({ type: "input_image", image_url: image, detail: "high" });
+  const content = [{ type: "input_text", text: latestText }];
+  for (const image of cleanImages) if (typeof image === "string" && image.startsWith("data:image/")) content.push({ type: "input_image", image_url: image, detail: "high" });
 
-    let response = await client.responses.create({
+  let response = await client.responses.create({
+    model: process.env.OPENAI_MODEL || "gpt-5-mini",
+    instructions: INSTRUCTIONS,
+    tools: [SCHEDULE_TOOL],
+    input: [{ role: "user", content }],
+    max_output_tokens: 300
+  });
+
+  for (let round = 0; round < 3; round += 1) {
+    const calls = (response.output || []).filter((item) => item.type === "function_call" && item.name === "get_schedule");
+    if (calls.length === 0) break;
+    const toolOutputs = [];
+    for (const call of calls) {
+      let args;
+      try { args = JSON.parse(call.arguments || "{}"); } catch { args = {}; }
+      const result = await getArboxSchedule({ from_date: String(args.from_date || ""), to_date: String(args.to_date || "") });
+      toolOutputs.push({ type: "function_call_output", call_id: call.call_id, output: JSON.stringify(result) });
+    }
+    response = await client.responses.create({
       model: process.env.OPENAI_MODEL || "gpt-5-mini",
       instructions: INSTRUCTIONS,
       tools: [SCHEDULE_TOOL],
-      input: [{ role: "user", content }],
+      previous_response_id: response.id,
+      input: toolOutputs,
       max_output_tokens: 300
     });
+  }
 
-    for (let round = 0; round < 3; round += 1) {
-      const calls = (response.output || []).filter((item) => item.type === "function_call" && item.name === "get_schedule");
-      if (calls.length === 0) break;
-      const toolOutputs = [];
-      for (const call of calls) {
-        let args;
-        try { args = JSON.parse(call.arguments || "{}"); } catch { args = {}; }
-        const result = await getArboxSchedule({ from_date: String(args.from_date || ""), to_date: String(args.to_date || "") });
-        toolOutputs.push({ type: "function_call_output", call_id: call.call_id, output: JSON.stringify(result) });
-      }
-      response = await client.responses.create({
-        model: process.env.OPENAI_MODEL || "gpt-5-mini",
-        instructions: INSTRUCTIONS,
-        tools: [SCHEDULE_TOOL],
-        previous_response_id: response.id,
-        input: toolOutputs,
-        max_output_tokens: 300
-      });
-    }
+  return response.output_text;
+}
 
-    res.json({ reply: response.output_text });
+async function sendWhatsAppText({ to, body, phoneNumberId }) {
+  const accessToken = String(process.env.WHATSAPP_ACCESS_TOKEN || "").trim();
+  if (!accessToken) throw new Error("WHATSAPP_ACCESS_TOKEN is missing.");
+  if (!phoneNumberId) throw new Error("WhatsApp phone number ID is missing.");
+
+  const response = await fetch(`https://graph.facebook.com/${META_GRAPH_VERSION}/${phoneNumberId}/messages`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      messaging_product: "whatsapp",
+      recipient_type: "individual",
+      to,
+      type: "text",
+      text: { preview_url: false, body }
+    })
+  });
+
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(`WhatsApp send failed: ${response.status} ${JSON.stringify(result)}`);
+  return result;
+}
+
+app.post("/api/chat", async (req, res) => {
+  try {
+    const reply = await generateReply({
+      message: req.body?.message,
+      images: req.body?.images,
+      history: req.body?.history
+    });
+    res.json({ reply });
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: "Could not generate a reply." });
+  }
+});
+
+// Meta uses this GET request once to verify that this is our webhook.
+app.get("/api/whatsapp/webhook", (req, res) => {
+  const mode = req.query["hub.mode"];
+  const token = req.query["hub.verify_token"];
+  const challenge = req.query["hub.challenge"];
+  const verifyToken = String(process.env.WHATSAPP_VERIFY_TOKEN || "").trim();
+
+  if (mode === "subscribe" && verifyToken && token === verifyToken) {
+    return res.status(200).send(challenge);
+  }
+  return res.sendStatus(403);
+});
+
+// Incoming WhatsApp messages arrive here. For now we auto-reply to text messages only.
+app.post("/api/whatsapp/webhook", async (req, res) => {
+  try {
+    const entries = Array.isArray(req.body?.entry) ? req.body.entry : [];
+    for (const entry of entries) {
+      const changes = Array.isArray(entry?.changes) ? entry.changes : [];
+      for (const change of changes) {
+        const value = change?.value || {};
+        const phoneNumberId = value?.metadata?.phone_number_id;
+        const messages = Array.isArray(value?.messages) ? value.messages : [];
+
+        for (const incoming of messages) {
+          if (incoming?.type !== "text") continue;
+          const from = String(incoming?.from || "").trim();
+          const text = String(incoming?.text?.body || "").trim();
+          if (!from || !text) continue;
+
+          const reply = await generateReply({ message: text, history: [] });
+          if (reply) await sendWhatsAppText({ to: from, body: reply, phoneNumberId });
+        }
+      }
+    }
+    return res.sendStatus(200);
+  } catch (error) {
+    console.error("WhatsApp webhook error", error);
+    return res.sendStatus(500);
   }
 });
 
