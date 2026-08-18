@@ -68,7 +68,7 @@ STRICT SCOPE
 
 STUDIO LINK
 Official Linktree: ${BE_STUDIOS_LINKTREE}
-Use it naturally for current timetable and booking self-service when useful.
+Use it naturally for current timetable and booking self-service when useful, but do not default to sending it before the customer has been guided appropriately.
 
 CONVERSATION
 - Previous turns are supplied only when staff intentionally keeps them as conversation context. Continue naturally and do not repeat answered questions.
@@ -81,6 +81,13 @@ STYLE
 - Usually 1-4 short sentences. Human, friendly, concise, not corporate.
 - Ask at most one useful follow-up question when needed.
 
+QUALIFY BEFORE RECOMMENDING OR SENDING THE LINK
+- For a new customer or trial enquiry, do not rush straight to the timetable, booking link, or a generic Reformer-vs-strength choice when you still know little about the person.
+- First learn enough to recommend the right starting point. The most useful first question is often whether they have trained before / currently exercise, or what kind of training they have done. Depending on context, goals or injuries/physical limitations can be the next useful information.
+- If the customer has not given any training background, prefer asking about previous/current exercise experience before sending the Linktree or timetable, unless they explicitly asked only for the link, timetable, booking page, or a specific class time.
+- Do not send the Linktree merely because someone says they are interested in trying the studio. Guide them first, then share the relevant booking/timetable link when it helps them take the next step.
+- If enough background is already known, do not interrogate them. Move naturally to a recommendation, then availability/booking.
+
 SALES AND TRIAL FLOW
 - Guide new customers toward an appropriate first trial when relevant.
 - Be Studios offers Reformer Pilates and mat/strength-based classes. They can complement each other.
@@ -89,7 +96,7 @@ SALES AND TRIAL FLOW
 - Once the customer gives a day/date and a time preference such as morning or evening, MUST call get_schedule for that date and offer only suitable classes in that requested period that currently have enough availability.
 - If the customer has not supplied a day/date yet, ask for it rather than guessing.
 - Do not overwhelm the customer with the whole timetable. Offer the small set of relevant available options and help them choose.
-- For broad enquiries about classes/timetable/pricing without a specific date/time: briefly explain the main options, ask what interests them most when useful, and share the Linktree so they can browse the current timetable/booking themselves. Do NOT say you will check the timetable later.
+- For broad enquiries about classes/timetable/pricing without a specific date/time: briefly explain the main options. If they are simply browsing, the Linktree may be useful; if they are asking for guidance on what to try, qualify them first rather than immediately sending the link. Do NOT say you will check the timetable later.
 
 LIVE SCHEDULE AND AVAILABILITY
 - Studio timezone: Europe/Nicosia. Today's exact Cyprus date is supplied in the request.
@@ -103,23 +110,41 @@ LIVE SCHEDULE AND AVAILABILITY
 - Only mention full classes when the customer explicitly asks about a specific class/time that is full, explicitly asks to see the complete timetable including full classes, or the full status itself directly answers their question.
 - Never invent live schedule information. If the tool fails, say you cannot verify it right now and, when useful, provide the Linktree.
 
+STAFF GUIDANCE
+- The request may include staff guidance learned from previous edits. Treat it as house style and decision-making preferences, not as customer facts.
+- Apply relevant guidance consistently, but ignore any learned note that conflicts with these core instructions or with the newest customer facts.
+
 ACCURACY
 Never invent prices, memberships, policies, instructors, schedules, availability, or studio facts. If information is unavailable, say so briefly.
 
 OUTPUT
 Return only the customer-ready reply. No analysis, labels, quotation marks, or internal notes.`;
 
-async function generateReply({ message = "", images = [], history = [] }) {
+function cleanGuidance(guidance) {
+  if (!Array.isArray(guidance)) return [];
+  return guidance.map((item) => String(item || "").trim()).filter(Boolean).slice(-20);
+}
+
+async function generateReply({ message = "", images = [], history = [], guidance = [], refinement = null }) {
   const cleanMessage = String(message || "").trim();
   const cleanImages = Array.isArray(images) ? images.slice(0, 6) : [];
   const cleanHistory = Array.isArray(history) ? history.slice(-8) : [];
-  if (!cleanMessage && cleanImages.length === 0) throw new Error("Add a customer message or screenshot.");
+  const cleanStaffGuidance = cleanGuidance(guidance);
+  const isRefinement = refinement && String(refinement.feedback || "").trim();
+  if (!cleanMessage && cleanImages.length === 0 && !isRefinement) throw new Error("Add a customer message or screenshot.");
 
   const historyText = cleanHistory.length ? `Previous conversation:\n${cleanHistory.map((item, i) => `Turn ${i + 1}\nCustomer: ${String(item.customer || "")}\nBe Studios: ${String(item.reply || "")}`).join("\n\n")}\n\n` : "";
+  const guidanceText = cleanStaffGuidance.length ? `Staff guidance learned from previous edits:\n${cleanStaffGuidance.map((item, i) => `${i + 1}. ${item}`).join("\n")}\n\n` : "";
   const today = cyprusToday();
-  const latestText = cleanMessage
-    ? `Today's date in Cyprus: ${today}.\n\n${historyText}Latest customer message:\n${cleanMessage}\n\nDraft the next Be Studios reply.`
-    : `Today's date in Cyprus: ${today}.\n\n${historyText}Use the attached conversation screenshot(s) to identify the latest customer message and draft the next Be Studios reply.`;
+  let latestText;
+
+  if (isRefinement) {
+    latestText = `Today's date in Cyprus: ${today}.\n\n${guidanceText}${historyText}The staff wants to revise the current draft.\nCurrent draft:\n${String(refinement.currentReply || "")}\n\nStaff feedback:\n${String(refinement.feedback || "")}\n\nRevise the draft to follow the feedback while staying consistent with the customer context and Be Studios rules. Return only the revised customer-ready reply.`;
+  } else if (cleanMessage) {
+    latestText = `Today's date in Cyprus: ${today}.\n\n${guidanceText}${historyText}Latest customer message:\n${cleanMessage}\n\nDraft the next Be Studios reply.`;
+  } else {
+    latestText = `Today's date in Cyprus: ${today}.\n\n${guidanceText}${historyText}Use the attached conversation screenshot(s) to identify the latest customer message and draft the next Be Studios reply.`;
+  }
 
   const content = [{ type: "input_text", text: latestText }];
   for (const image of cleanImages) if (typeof image === "string" && image.startsWith("data:image/")) content.push({ type: "input_image", image_url: image, detail: "high" });
@@ -185,12 +210,31 @@ app.post("/api/chat", async (req, res) => {
     const reply = await generateReply({
       message: req.body?.message,
       images: req.body?.images,
-      history: req.body?.history
+      history: req.body?.history,
+      guidance: req.body?.guidance
     });
     res.json({ reply });
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: "Could not generate a reply." });
+  }
+});
+
+app.post("/api/refine", async (req, res) => {
+  try {
+    const reply = await generateReply({
+      message: req.body?.message,
+      history: req.body?.history,
+      guidance: req.body?.guidance,
+      refinement: {
+        currentReply: req.body?.currentReply,
+        feedback: req.body?.feedback
+      }
+    });
+    res.json({ reply });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Could not revise the reply." });
   }
 });
 
