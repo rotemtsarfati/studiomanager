@@ -10,6 +10,7 @@ app.use(express.static(path.join(__dirname, "public")));
 
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const BE_STUDIOS_LINKTREE = "https://linktr.ee/Be_Studios_Cyprus?utm_source=linktree_profile_share&ltsid=1a7ec7a4-e819-4579-8a89-fd847f7ae502";
+const NEW_CLIENT_REGISTRATION_FORM = "https://drFoaEPs.web.arboxapp.com/?whitelabel=BeStudios&lang=en&location=21673&referrer=PLUGIN";
 const ARBOX_SCHEDULE_URL = "https://arboxserver.arboxapp.com/api/public/v3/schedule";
 const META_GRAPH_VERSION = process.env.META_GRAPH_VERSION || "v25.0";
 
@@ -69,6 +70,14 @@ STRICT SCOPE
 STUDIO LINK
 Official Linktree: ${BE_STUDIOS_LINKTREE}
 Use it naturally for current timetable and booking self-service when useful, but do not default to sending it before the customer has been guided appropriately.
+
+NEW CLIENT REGISTRATION FORM
+Official new-client registration form: ${NEW_CLIENT_REGISTRATION_FORM}
+- When a person is NEW to Be Studios / not yet registered in the studio system and wants to register or book a class, they must first complete this registration form before proceeding with class booking.
+- In that situation, send this form clearly and ask them to complete it first. After they complete it, the studio can proceed with booking them into the agreed class.
+- Do not use this form for an existing/returning customer who is already registered in the studio system.
+- Do not send this form too early just because someone asks a general question. First guide them to the right class as usual; send the registration form when the new customer is ready to register/book.
+- If the conversation makes it clear that the customer is new and they are asking to book a specific available class, the registration form takes priority over the general Linktree booking link.
 
 CONVERSATION
 - Previous turns are supplied only when staff intentionally keeps them as conversation context. Continue naturally and do not repeat answered questions.
