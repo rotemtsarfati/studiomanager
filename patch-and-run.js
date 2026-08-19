@@ -6,6 +6,12 @@ import { pathToFileURL } from "url";
 const sourcePath = path.join(process.cwd(), "server.js");
 let source = fs.readFileSync(sourcePath, "utf8");
 
+// Arbox's documented endpoint is case-sensitive: membershipTypes (capital T).
+source = source.replace(
+  'const ARBOX_MEMBERSHIPS_URL = "https://arboxserver.arboxapp.com/api/public/v3/membershiptypes";',
+  'const ARBOX_MEMBERSHIPS_URL = "https://arboxserver.arboxapp.com/api/public/v3/membershipTypes";'
+);
+
 const helpers = String.raw`
 
 function collectMembershipCandidates(value, out = [], depth = 0) {
@@ -50,6 +56,18 @@ function extractUrlsFromPackage(item) {
       const keyBonus = /(purchase|payment|checkout|shop|sale|link|url)/i.test(field.key) ? 20 : 0;
       const arboxBonus = /arbox\\.link\\//i.test(clean) ? 60 : /arboxapp\\.com/i.test(clean) ? 15 : 0;
       urls.push({ url: clean, score: keyBonus + arboxBonus, key: field.key });
+    }
+
+    // The Membership Types API exposes a `token` field. Arbox direct package links
+    // use that token in the public https://arbox.link/<token> format.
+    if (/(^|\\.)token$/.test(field.key)) {
+      const token = field.value.trim();
+      if (/^[A-Za-z0-9_-]{4,}$/.test(token)) {
+        const direct = `https://arbox.link/${token}`;
+        if (!urls.some((entry) => entry.url === direct)) {
+          urls.push({ url: direct, score: 100, key: field.key });
+        }
+      }
     }
   }
   return urls.sort((a, b) => b.score - a.score);
