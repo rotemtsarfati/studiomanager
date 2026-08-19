@@ -10,6 +10,7 @@ app.use(express.static(path.join(__dirname, "public")));
 
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const BE_STUDIOS_LINKTREE = "https://linktr.ee/Be_Studios_Cyprus?utm_source=linktree_profile_share&ltsid=1a7ec7a4-e819-4579-8a89-fd847f7ae502";
+const BE_STUDIOS_MEMBERSHIP_SHOP = "https://drFoaEPs.web.arboxapp.com/membership?whitelabel=BeStudios&lang=en&location=21673&referrer=PLUGIN";
 const NEW_CLIENT_REGISTRATION_FORM = "https://drFoaEPs.web.arboxapp.com/?whitelabel=BeStudios&lang=en&location=21673&referrer=PLUGIN";
 const ARBOX_SCHEDULE_URL = "https://arboxserver.arboxapp.com/api/public/v3/schedule";
 const ARBOX_MEMBERSHIPS_URL = "https://arboxserver.arboxapp.com/api/public/v3/membershiptypes";
@@ -42,16 +43,12 @@ async function getArboxSchedule({ from_date, to_date }) {
   return { ok: true, from_date, to_date, schedule: body };
 }
 
-async function getArboxMembershipTypes() {
+async function fetchArboxMembershipsWithParams(params) {
   const apiKey = String(process.env.ARBOX_API_KEY || "").trim();
   if (!apiKey) return { ok: false, error: "Membership packages are not configured yet. ARBOX_API_KEY is missing." };
 
   const url = new URL(ARBOX_MEMBERSHIPS_URL);
-  url.searchParams.set("active", "1");
-  url.searchParams.set("limit", "500");
-  url.searchParams.set("page", "1");
-  url.searchParams.set("location_id", ARBOX_LOCATION_ID);
-  url.searchParams.set("with_membership_types_props", "1");
+  for (const [key, value] of Object.entries(params)) url.searchParams.set(key, String(value));
 
   const response = await fetch(url, {
     method: "GET",
@@ -61,8 +58,42 @@ async function getArboxMembershipTypes() {
   const text = await response.text();
   let body;
   try { body = JSON.parse(text); } catch { body = text; }
-  if (!response.ok) return { ok: false, status: response.status, error: "Arbox membership types request failed.", details: body };
-  return { ok: true, location_id: ARBOX_LOCATION_ID, membership_types: body };
+  if (!response.ok) {
+    console.error("ARBOX_MEMBERSHIP_FETCH_FAILED", JSON.stringify({ status: response.status, params, details: body }));
+    return { ok: false, status: response.status, error: "Arbox membership types request failed.", details: body };
+  }
+  return { ok: true, body };
+}
+
+async function getArboxMembershipTypes() {
+  const primary = await fetchArboxMembershipsWithParams({
+    active: 1,
+    limit: 500,
+    page: 1,
+    location_id: ARBOX_LOCATION_ID,
+    with_membership_types_props: 1
+  });
+
+  if (primary.ok) {
+    console.log("ARBOX_MEMBERSHIP_FETCH_OK", JSON.stringify({ mode: "full", topLevelType: Array.isArray(primary.body) ? "array" : typeof primary.body }));
+    return { ok: true, location_id: ARBOX_LOCATION_ID, membership_types: primary.body };
+  }
+
+  // Arbox accounts can differ in which optional membership filters/properties are enabled.
+  // Retry with only documented basic filters so a non-supported optional parameter does not block package matching.
+  const retry = await fetchArboxMembershipsWithParams({ active: 1, limit: 500, page: 1 });
+  if (retry.ok) {
+    console.log("ARBOX_MEMBERSHIP_FETCH_OK", JSON.stringify({ mode: "basic-retry", topLevelType: Array.isArray(retry.body) ? "array" : typeof retry.body }));
+    return { ok: true, location_id: ARBOX_LOCATION_ID, membership_types: retry.body, note: "Fetched without optional location/property filters." };
+  }
+
+  return {
+    ok: false,
+    error: "Could not load live membership packages from Arbox.",
+    primary_status: primary.status,
+    retry_status: retry.status,
+    shop_url: BE_STUDIOS_MEMBERSHIP_SHOP
+  };
 }
 
 const SCHEDULE_TOOL = {
@@ -106,6 +137,7 @@ STRICT SCOPE
 STUDIO LINK
 Official Linktree: ${BE_STUDIOS_LINKTREE}
 Use it naturally for current timetable and booking self-service when useful, but do not default to sending it before the customer has been guided appropriately.
+Official Arbox membership shop: ${BE_STUDIOS_MEMBERSHIP_SHOP}
 
 NEW CLIENT REGISTRATION FORM
 Official new-client registration form: ${NEW_CLIENT_REGISTRATION_FORM}
@@ -123,8 +155,9 @@ LIVE MEMBERSHIPS / PACKAGES
 - If the customer asks for a different number of sessions, select the closest exact relevant active package only when the live Arbox data supports that match. Never invent a package or session count.
 - If more than one live package could plausibly match, ask one short clarifying question rather than dumping all packages.
 - If the Arbox response contains a direct public purchase/shop/payment URL for the matching package, send that exact direct URL. Do not substitute the general Linktree when a direct package URL is available.
-- If the live package data does NOT provide a direct customer purchase URL, do not invent one. In that case use the official Linktree only as the fallback purchase path and name the exact package the customer should select.
-- NEVER say “we’ll send you the payment link”, “we can send the correct link”, or otherwise postpone the purchase link when the customer has already told us the number/type of classes they want. Resolve the matching package in the CURRENT reply from live Arbox data and include the direct purchase URL now when one exists.
+- If the live package data does NOT provide a direct customer purchase URL but the exact package is identifiable, send the official Arbox membership shop ${BE_STUDIOS_MEMBERSHIP_SHOP} and name the exact package the customer should select. Do not say the payment page is unavailable when this shop URL is available.
+- If the package API itself fails, do NOT tell the customer about an API/system failure. Use the official Arbox membership shop as the customer-facing fallback and avoid claiming a specific package name/price unless known from live data.
+- NEVER say “we’ll send you the payment link”, “we can send the correct link”, “the package/payment page is temporarily unavailable”, or otherwise postpone the purchase link when the customer has already told us the number/type of classes they want. Include a usable purchase path in the CURRENT reply.
 - When live Arbox package data is already included in the request context, use it directly. Do not call the tool again unless needed, and do not ignore it.
 - Do not expose internal package IDs, raw API fields or irrelevant packages to the customer.
 
@@ -223,7 +256,7 @@ async function generateReply({ message = "", images = [], history = [], guidance
   let livePackageContext = "";
   if (hasPackageIntent(packageIntentSource)) {
     const memberships = await getArboxMembershipTypes();
-    livePackageContext = `LIVE ARBOX PACKAGE DATA (already fetched for this reply):\n${JSON.stringify(memberships)}\n\nIMPORTANT: Use this live data now to identify the exact package that matches the customer's requested number/type of classes. If an exact direct purchase/payment/shop URL exists in this data, include it in the CURRENT customer reply. Do not say that Be Studios will send the payment link later.\n\n`;
+    livePackageContext = `LIVE ARBOX PACKAGE DATA (already fetched for this reply):\n${JSON.stringify(memberships)}\n\nIMPORTANT: Use this live data now to identify the exact package that matches the customer's requested number/type of classes. If an exact direct purchase/payment/shop URL exists in this data, include it in the CURRENT customer reply. If live data has no direct package URL or fails, use the official Arbox membership shop ${BE_STUDIOS_MEMBERSHIP_SHOP} as the purchase path instead of telling the customer the page is unavailable.\n\n`;
   }
 
   let latestText;
