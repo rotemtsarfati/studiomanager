@@ -124,6 +124,8 @@ LIVE MEMBERSHIPS / PACKAGES
 - If more than one live package could plausibly match, ask one short clarifying question rather than dumping all packages.
 - If the Arbox response contains a direct public purchase/shop/payment URL for the matching package, send that exact direct URL. Do not substitute the general Linktree when a direct package URL is available.
 - If the live package data does NOT provide a direct customer purchase URL, do not invent one. In that case use the official Linktree only as the fallback purchase path and name the exact package the customer should select.
+- NEVER say “we’ll send you the payment link”, “we can send the correct link”, or otherwise postpone the purchase link when the customer has already told us the number/type of classes they want. Resolve the matching package in the CURRENT reply from live Arbox data and include the direct purchase URL now when one exists.
+- When live Arbox package data is already included in the request context, use it directly. Do not call the tool again unless needed, and do not ignore it.
 - Do not expose internal package IDs, raw API fields or irrelevant packages to the customer.
 
 STUDIO-INITIATED LEADS AND PACKAGE FLOW
@@ -193,6 +195,12 @@ function cleanGuidance(guidance) {
   return guidance.map((item) => String(item || "").trim()).filter(Boolean).slice(-20);
 }
 
+function hasPackageIntent(text) {
+  const value = String(text || "").toLowerCase();
+  if (!value) return false;
+  return /(package|membership|payment|pay\b|purchase|buy|class pack|lesson pack|session pack|\b\d+\s*(classes|lessons|sessions|entries)\b|\b(eight|six|ten|twelve|four)\s+(classes|lessons|sessions|entries)\b)/i.test(value);
+}
+
 async function generateReply({ message = "", images = [], history = [], guidance = [], refinement = null }) {
   const cleanMessage = String(message || "").trim();
   const cleanImages = Array.isArray(images) ? images.slice(0, 6) : [];
@@ -204,14 +212,27 @@ async function generateReply({ message = "", images = [], history = [], guidance
   const historyText = cleanHistory.length ? `Previous conversation:\n${cleanHistory.map((item, i) => `Turn ${i + 1}\nCustomer: ${String(item.customer || "")}\nBe Studios: ${String(item.reply || "")}`).join("\n\n")}\n\n` : "";
   const guidanceText = cleanStaffGuidance.length ? `Staff guidance learned from previous edits:\n${cleanStaffGuidance.map((item, i) => `${i + 1}. ${item}`).join("\n")}\n\n` : "";
   const today = cyprusToday();
-  let latestText;
 
+  const packageIntentSource = [
+    cleanMessage,
+    ...cleanHistory.map((item) => `${String(item.customer || "")} ${String(item.reply || "")}`),
+    isRefinement ? String(refinement.currentReply || "") : "",
+    isRefinement ? String(refinement.feedback || "") : ""
+  ].join("\n");
+
+  let livePackageContext = "";
+  if (hasPackageIntent(packageIntentSource)) {
+    const memberships = await getArboxMembershipTypes();
+    livePackageContext = `LIVE ARBOX PACKAGE DATA (already fetched for this reply):\n${JSON.stringify(memberships)}\n\nIMPORTANT: Use this live data now to identify the exact package that matches the customer's requested number/type of classes. If an exact direct purchase/payment/shop URL exists in this data, include it in the CURRENT customer reply. Do not say that Be Studios will send the payment link later.\n\n`;
+  }
+
+  let latestText;
   if (isRefinement) {
-    latestText = `Today's date in Cyprus: ${today}.\n\n${guidanceText}${historyText}The staff wants to revise the current draft.\nCurrent draft:\n${String(refinement.currentReply || "")}\n\nStaff feedback:\n${String(refinement.feedback || "")}\n\nRevise the draft to follow the feedback while staying consistent with the customer context and Be Studios rules. Return only the revised customer-ready reply.`;
+    latestText = `Today's date in Cyprus: ${today}.\n\n${livePackageContext}${guidanceText}${historyText}The staff wants to revise the current draft.\nCurrent draft:\n${String(refinement.currentReply || "")}\n\nStaff feedback:\n${String(refinement.feedback || "")}\n\nRevise the draft to follow the feedback while staying consistent with the customer context and Be Studios rules. Return only the revised customer-ready reply.`;
   } else if (cleanMessage) {
-    latestText = `Today's date in Cyprus: ${today}.\n\n${guidanceText}${historyText}Latest customer message:\n${cleanMessage}\n\nDraft the next Be Studios reply.`;
+    latestText = `Today's date in Cyprus: ${today}.\n\n${livePackageContext}${guidanceText}${historyText}Latest customer message:\n${cleanMessage}\n\nDraft the next Be Studios reply.`;
   } else {
-    latestText = `Today's date in Cyprus: ${today}.\n\n${guidanceText}${historyText}Use the attached conversation screenshot(s) to identify the latest customer message and draft the next Be Studios reply.`;
+    latestText = `Today's date in Cyprus: ${today}.\n\n${livePackageContext}${guidanceText}${historyText}Use the attached conversation screenshot(s) to identify the latest customer message and draft the next Be Studios reply.`;
   }
 
   const content = [{ type: "input_text", text: latestText }];
