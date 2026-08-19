@@ -13,7 +13,7 @@ const BE_STUDIOS_LINKTREE = "https://linktr.ee/Be_Studios_Cyprus?utm_source=link
 const BE_STUDIOS_MEMBERSHIP_SHOP = "https://drFoaEPs.web.arboxapp.com/membership?whitelabel=BeStudios&lang=en&location=21673&referrer=PLUGIN";
 const NEW_CLIENT_REGISTRATION_FORM = "https://drFoaEPs.web.arboxapp.com/?whitelabel=BeStudios&lang=en&location=21673&referrer=PLUGIN";
 const ARBOX_SCHEDULE_URL = "https://arboxserver.arboxapp.com/api/public/v3/schedule";
-const ARBOX_MEMBERSHIPS_URL = "https://arboxserver.arboxapp.com/api/public/v3/membershiptypes";
+const ARBOX_MEMBERSHIPS_URL = "https://arboxserver.arboxapp.com/api/public/v3/membershipTypes";
 const ARBOX_LOCATION_ID = "21673";
 const META_GRAPH_VERSION = process.env.META_GRAPH_VERSION || "v25.0";
 
@@ -59,9 +59,10 @@ async function fetchArboxMembershipsWithParams(params) {
   let body;
   try { body = JSON.parse(text); } catch { body = text; }
   if (!response.ok) {
-    console.error("ARBOX_MEMBERSHIP_FETCH_FAILED", JSON.stringify({ status: response.status, params, details: body }));
+    console.error("ARBOX_MEMBERSHIP_FETCH_FAILED", JSON.stringify({ url: url.toString(), status: response.status, params, details: body }));
     return { ok: false, status: response.status, error: "Arbox membership types request failed.", details: body };
   }
+  console.log("ARBOX_MEMBERSHIP_FETCH_OK", JSON.stringify({ url: url.toString(), status: response.status }));
   return { ok: true, body };
 }
 
@@ -75,15 +76,11 @@ async function getArboxMembershipTypes() {
   });
 
   if (primary.ok) {
-    console.log("ARBOX_MEMBERSHIP_FETCH_OK", JSON.stringify({ mode: "full", topLevelType: Array.isArray(primary.body) ? "array" : typeof primary.body }));
     return { ok: true, location_id: ARBOX_LOCATION_ID, membership_types: primary.body };
   }
 
-  // Arbox accounts can differ in which optional membership filters/properties are enabled.
-  // Retry with only documented basic filters so a non-supported optional parameter does not block package matching.
   const retry = await fetchArboxMembershipsWithParams({ active: 1, limit: 500, page: 1 });
   if (retry.ok) {
-    console.log("ARBOX_MEMBERSHIP_FETCH_OK", JSON.stringify({ mode: "basic-retry", topLevelType: Array.isArray(retry.body) ? "array" : typeof retry.body }));
     return { ok: true, location_id: ARBOX_LOCATION_ID, membership_types: retry.body, note: "Fetched without optional location/property filters." };
   }
 
@@ -115,7 +112,7 @@ const SCHEDULE_TOOL = {
 const MEMBERSHIPS_TOOL = {
   type: "function",
   name: "get_membership_types",
-  description: "Get all active Be Studios membership/package types from Arbox, including their live properties. Use whenever the customer asks about packages, number of sessions/entries, package price, or which package to buy.",
+  description: "Get all active Be Studios membership/package types from Arbox, including live properties and token. The token creates the direct package URL https://arbox.link/<token>.",
   parameters: {
     type: "object",
     properties: {},
@@ -150,22 +147,22 @@ Official new-client registration form: ${NEW_CLIENT_REGISTRATION_FORM}
 
 LIVE MEMBERSHIPS / PACKAGES
 - Arbox is the source of truth for active packages. Whenever a customer asks about a package, number of sessions/entries, package pricing, or which package they should buy, MUST call get_membership_types before answering.
-- Match the package to the customer's actual request using the live package name and properties. Consider number of sessions/entries, class type/category (for example Reformer versus other classes), validity and any other relevant live properties returned by Arbox.
-- If the customer asks for 8 Reformer classes, choose ONLY the active package that actually corresponds to 8 Reformer sessions. Do not offer unrelated packages or a generic list if one package clearly matches.
-- If the customer asks for a different number of sessions, select the closest exact relevant active package only when the live Arbox data supports that match. Never invent a package or session count.
-- If more than one live package could plausibly match, ask one short clarifying question rather than dumping all packages.
-- If the Arbox response contains a direct public purchase/shop/payment URL for the matching package, send that exact direct URL. Do not substitute the general Linktree when a direct package URL is available.
-- If the live package data does NOT provide a direct customer purchase URL but the exact package is identifiable, send the official Arbox membership shop ${BE_STUDIOS_MEMBERSHIP_SHOP} and name the exact package the customer should select. Do not say the payment page is unavailable when this shop URL is available.
+- Match the package to the customer's actual request using the live package name and properties. Consider number of sessions/entries, class type/category (for example Reformer versus Mat/Strength), validity and any other relevant live properties returned by Arbox.
+- The Arbox Membership Types API returns a field called token. IMPORTANT: token is the direct public package link slug. Build the direct purchase link exactly as https://arbox.link/<token>.
+- If an exact package match has a token, MUST send https://arbox.link/<token> in the current reply. NEVER replace it with the general membership shop.
+- If the customer asks for 8 Reformer classes, choose ONLY the active package that corresponds to 8 Reformer sessions and use its token link.
+- If the customer asks for 4 Reformer classes, choose ONLY the 4-session Reformer package and use its token link. If they ask for 4 Mat/Strength classes, choose ONLY the corresponding Mat/Strength package and use its token link.
+- If the customer gives a session count but the class type is genuinely ambiguous and more than one active package has that count, ask one short clarifying question rather than guessing or sending the general shop.
+- If the live package data identifies one exact package, do not send a generic list or general membership shop.
+- Only when the exact matching package has no token and no direct URL may you use the general membership shop ${BE_STUDIOS_MEMBERSHIP_SHOP} and name the exact package to select.
 - If the package API itself fails, do NOT tell the customer about an API/system failure. Use the official Arbox membership shop as the customer-facing fallback and avoid claiming a specific package name/price unless known from live data.
-- NEVER say “we’ll send you the payment link”, “we can send the correct link”, “the package/payment page is temporarily unavailable”, or otherwise postpone the purchase link when the customer has already told us the number/type of classes they want. Include a usable purchase path in the CURRENT reply.
-- When live Arbox package data is already included in the request context, use it directly. Do not call the tool again unless needed, and do not ignore it.
-- Do not expose internal package IDs, raw API fields or irrelevant packages to the customer.
+- NEVER say “we’ll send you the payment link”, “we can send the correct link”, “the package/payment page is temporarily unavailable”, or otherwise postpone the purchase link when the customer has already told us the number/type of classes they want.
+- Do not expose internal package IDs or raw API fields to the customer.
 
 STUDIO-INITIATED LEADS AND PACKAGE FLOW
 - Distinguish between a customer who contacts the studio for the first time and a lead whom Be Studios contacted first after receiving their details/form submission. For studio-initiated leads, continue the sales flow from where the studio started it; do not restart onboarding or ask them to fill the same form again.
-- If a studio-initiated lead sends a concrete list of classes they want, treat that as strong booking intent. Verify the requested class availability when needed, then call get_membership_types and guide them to purchase the exact matching live package rather than re-qualifying them.
-- For example, if they want 8 Reformer classes, call get_membership_types and send only the exact 8-session Reformer package and its direct purchase link when available.
-- After they purchase the package, explain that they will receive the relevant link/instructions, can download the Be Studios app, and Be Studios can help register/book them into the classes they selected.
+- If a studio-initiated lead sends a concrete list of classes they want, treat that as strong booking intent. Verify requested class availability when needed, then call get_membership_types and guide them to purchase the exact matching live package rather than re-qualifying them.
+- After they purchase the package, explain that they can download the Be Studios app and Be Studios can help register/book them into the classes they selected.
 - When the customer has already supplied the exact class list, acknowledge it and keep the next step simple: purchase the matching package, then Be Studios will help secure/register the selected classes subject to live availability.
 
 CONVERSATION
@@ -256,7 +253,7 @@ async function generateReply({ message = "", images = [], history = [], guidance
   let livePackageContext = "";
   if (hasPackageIntent(packageIntentSource)) {
     const memberships = await getArboxMembershipTypes();
-    livePackageContext = `LIVE ARBOX PACKAGE DATA (already fetched for this reply):\n${JSON.stringify(memberships)}\n\nIMPORTANT: Use this live data now to identify the exact package that matches the customer's requested number/type of classes. If an exact direct purchase/payment/shop URL exists in this data, include it in the CURRENT customer reply. If live data has no direct package URL or fails, use the official Arbox membership shop ${BE_STUDIOS_MEMBERSHIP_SHOP} as the purchase path instead of telling the customer the page is unavailable.\n\n`;
+    livePackageContext = `LIVE ARBOX PACKAGE DATA (already fetched for this reply):\n${JSON.stringify(memberships)}\n\nIMPORTANT PACKAGE LINK RULE: For an exact matching package, if its record contains token, the direct purchase URL is https://arbox.link/<token>. You MUST construct and send that direct URL in the CURRENT reply. Do NOT use the general membership shop when the exact matching package has a token. Match both requested session count and class type from the full conversation. If several packages have the same count and class type is not known, ask one short clarifying question. Only if the exact package has no token/direct URL may you use ${BE_STUDIOS_MEMBERSHIP_SHOP}.\n\n`;
   }
 
   let latestText;
