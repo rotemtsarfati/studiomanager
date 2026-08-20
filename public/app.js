@@ -21,9 +21,9 @@ const voiceLanguage = document.querySelector('#voiceLanguage');
 const voiceStatus = document.querySelector('#voiceStatus');
 
 const CORE_STUDIO_GUIDANCE = [
-  'The Be Studios trial offer is only for people who live permanently in the Paphos area. Tourists, holiday visitors, seasonal visitors, and people who only visit Paphos occasionally are not eligible for the trial offer.',
-  'If the customer clearly says they are a tourist or do not live permanently in Paphos, do not offer or book a trial. Warmly explain that the trial is reserved for permanent Paphos-area residents, say we would still be very happy to welcome them for a regular class, and invite them to contact us closer to their next visit so we can help choose the best class and time for them.',
-  'Keep tourist replies welcoming and positive; do not make the customer feel rejected or over-explain the trial policy.'
+  'The Be Studios trial offer is only for people who live permanently in the Paphos area. Tourists, holiday visitors, seasonal visitors, and people who only visit Paphos occasionally should not be offered the trial.',
+  'If the customer clearly says they are a tourist or do not live permanently in Paphos, keep the wording very soft and welcoming. Simply say that the trial is for people who live permanently in Paphos, then immediately add that we would of course be very happy to welcome them when they visit. Invite them to message us closer to their visit and we will happily help find the best class and time for them.',
+  'Do not use hard or rejecting phrases such as “not eligible”, “would not apply to you”, “reserved for residents”, or similar. Do not over-explain the policy. The tone should feel warm, simple and inviting.'
 ];
 
 let imageData = [];
