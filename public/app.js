@@ -95,31 +95,66 @@ function readFile(file) {
   });
 }
 
+async function postJsonWithRetry(url, payload, options = {}) {
+  const timeoutMs = options.timeoutMs || 45000;
+  const attempts = options.attempts || 2;
+  let lastError;
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const r = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        signal: controller.signal
+      });
+      const raw = await r.text();
+      let data = {};
+      try { data = raw ? JSON.parse(raw) : {}; } catch { data = { error: raw || 'Invalid server response' }; }
+      if (!r.ok) throw new Error(data.error || `Request failed (${r.status})`);
+      if (!data || typeof data.reply !== 'string' || !data.reply.trim()) {
+        throw new Error('The AI returned an empty reply. Retrying…');
+      }
+      return data;
+    } catch (e) {
+      lastError = e;
+      const retryable = e.name === 'AbortError' || /empty reply|network|fetch|timeout|failed/i.test(String(e.message || e));
+      if (!retryable || attempt === attempts) break;
+      status.textContent = 'The reply did not come through. Retrying automatically…';
+      await new Promise(resolve => setTimeout(resolve, 700));
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  if (lastError?.name === 'AbortError') throw new Error('The reply took too long. Please tap Create reply again.');
+  throw lastError || new Error('Could not create a reply. Please try again.');
+}
+
 send.addEventListener('click', async () => {
   const text = message.value.trim();
   if (!text && !imageData.length) return;
   send.disabled = true;
   send.textContent = 'Writing…';
   status.textContent = '';
+  answer.textContent = '';
   try {
-    const r = await fetch('/api/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: text, images: imageData, history, guidance })
-    });
-    const data = await r.json();
-    if (!r.ok) throw new Error(data.error || 'Request failed');
-    answer.textContent = data.reply;
+    const data = await postJsonWithRetry('/api/chat', { message: text, images: imageData, history, guidance });
+    answer.textContent = data.reply.trim();
     card.classList.remove('hidden');
-    history.push({ customer: text || '[message shown in screenshot]', reply: data.reply });
+    history.push({ customer: text || '[message shown in screenshot]', reply: data.reply.trim() });
     history = history.slice(-8);
     saveHistory();
     renderHistory();
     message.value = '';
     feedback.value = '';
     clearImages();
+    status.textContent = '';
   } catch (e) {
-    status.textContent = e.message;
+    card.classList.add('hidden');
+    status.textContent = e.message || 'Could not create a reply. Please try again.';
   } finally {
     send.disabled = false;
     send.textContent = 'Create reply';
@@ -135,21 +170,15 @@ refine.addEventListener('click', async () => {
   refine.textContent = 'Revising…';
   status.textContent = '';
   try {
-    const r = await fetch('/api/refine', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        message: latest.customer === '[message shown in screenshot]' ? '' : latest.customer,
-        currentReply,
-        feedback: note,
-        history,
-        guidance
-      })
+    const data = await postJsonWithRetry('/api/refine', {
+      message: latest.customer === '[message shown in screenshot]' ? '' : latest.customer,
+      currentReply,
+      feedback: note,
+      history,
+      guidance
     });
-    const data = await r.json();
-    if (!r.ok) throw new Error(data.error || 'Request failed');
-    answer.textContent = data.reply;
-    latest.reply = data.reply;
+    answer.textContent = data.reply.trim();
+    latest.reply = data.reply.trim();
     saveHistory();
     renderHistory();
     if (rememberGuidance.checked) {
@@ -158,8 +187,9 @@ refine.addEventListener('click', async () => {
       saveGuidance();
     }
     feedback.value = '';
+    status.textContent = '';
   } catch (e) {
-    status.textContent = e.message;
+    status.textContent = e.message || 'Could not revise the reply. Please try again.';
   } finally {
     refine.disabled = false;
     refine.textContent = 'Revise reply';
