@@ -20,6 +20,12 @@ const voiceFeedback = document.querySelector('#voiceFeedback');
 const voiceLanguage = document.querySelector('#voiceLanguage');
 const voiceStatus = document.querySelector('#voiceStatus');
 
+const CORE_STUDIO_GUIDANCE = [
+  'The Be Studios trial offer is only for people who live permanently in the Paphos area. Tourists, holiday visitors, seasonal visitors, and people who only visit Paphos occasionally are not eligible for the trial offer.',
+  'If the customer clearly says they are a tourist or do not live permanently in Paphos, do not offer or book a trial. Warmly explain that the trial is reserved for permanent Paphos-area residents, say we would still be very happy to welcome them for a regular class, and invite them to contact us closer to their next visit so we can help choose the best class and time for them.',
+  'Keep tourist replies welcoming and positive; do not make the customer feel rejected or over-explain the trial policy.'
+];
+
 let imageData = [];
 let history = [];
 let guidance = [];
@@ -30,6 +36,10 @@ let speechBaseText = '';
 try { history = JSON.parse(localStorage.getItem('beStudiosConversation') || '[]'); } catch { history = []; }
 try { guidance = JSON.parse(localStorage.getItem('beStudiosGuidance') || '[]'); } catch { guidance = []; }
 if (!Array.isArray(guidance)) guidance = [];
+
+function effectiveGuidance() {
+  return [...CORE_STUDIO_GUIDANCE, ...guidance];
+}
 
 function saveHistory() {
   localStorage.setItem('beStudiosConversation', JSON.stringify(history));
@@ -141,7 +151,7 @@ send.addEventListener('click', async () => {
   status.textContent = '';
   answer.textContent = '';
   try {
-    const data = await postJsonWithRetry('/api/chat', { message: text, images: imageData, history, guidance });
+    const data = await postJsonWithRetry('/api/chat', { message: text, images: imageData, history, guidance: effectiveGuidance() });
     answer.textContent = data.reply.trim();
     card.classList.remove('hidden');
     history.push({ customer: text || '[message shown in screenshot]', reply: data.reply.trim() });
@@ -175,7 +185,7 @@ refine.addEventListener('click', async () => {
       currentReply,
       feedback: note,
       history,
-      guidance
+      guidance: effectiveGuidance()
     });
     answer.textContent = data.reply.trim();
     latest.reply = data.reply.trim();
