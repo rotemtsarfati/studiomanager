@@ -46,19 +46,16 @@ function buildHistory(messages, currentMessageId) {
   return turns.slice(-8);
 }
 
-async function generateOnDemand(req, latestIncoming, messages) {
+async function generateOnDemand(req, latestIncoming, history) {
   const host = String(req.headers?.host || "studiomanager-blush.vercel.app");
   const proto = String(req.headers?.["x-forwarded-proto"] || "https").split(",")[0].trim() || "https";
   const response = await fetch(`${proto}://${host}/api/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      message: String(latestIncoming?.content || "").trim(),
-      history: buildHistory(messages, latestIncoming?.id)
-    })
+    body: JSON.stringify({ message: String(latestIncoming?.content || "").trim(), history })
   });
   const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(`AI generation failed (${response.status}).`);
+  if (!response.ok) throw new Error(`AI generation failed (${response.status}): ${body?.error || "unknown"}`);
   return String(body?.reply || "").trim();
 }
 
@@ -66,6 +63,8 @@ export default async function handler(req, res) {
   try {
     if (req.method !== "GET") return res.status(405).json({ error: "Method not allowed." });
     if (!dashboardTokenValid(req)) return res.status(401).json({ error: "Unauthorized." });
+
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
 
     const accountId = Number(req.query?.account_id || 0);
     const conversationId = Number(req.query?.conversation_id || 0);
@@ -84,6 +83,8 @@ export default async function handler(req, res) {
     const latestIncoming = [...messages].filter(isIncoming).sort((a, b) => messageTime(b) - messageTime(a))[0];
     if (!latestIncoming) return res.status(200).json({ suggestion: "", pending: false });
 
+    const history = buildHistory(messages, latestIncoming.id);
+    const latestCustomerMessage = String(latestIncoming.content || "").trim();
     const latestIncomingTime = messageTime(latestIncoming);
     const freshNote = [...messages]
       .filter(isAiSuggestion)
@@ -95,16 +96,20 @@ export default async function handler(req, res) {
         suggestion: String(freshNote.content || "").replace(/^✨ AI suggested reply\s*/u, "").trim(),
         pending: false,
         latest_message_id: latestIncoming.id,
+        latest_customer_message: latestCustomerMessage,
+        history,
         suggestion_message_id: freshNote.id,
         source: "private_note"
       });
     }
 
-    const suggestion = await generateOnDemand(req, latestIncoming, messages);
+    const suggestion = await generateOnDemand(req, latestIncoming, history);
     return res.status(200).json({
       suggestion,
       pending: false,
       latest_message_id: latestIncoming.id,
+      latest_customer_message: latestCustomerMessage,
+      history,
       source: "generated_on_demand"
     });
   } catch (error) {
