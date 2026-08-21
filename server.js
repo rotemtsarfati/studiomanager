@@ -1,11 +1,17 @@
 import express from "express";
 import OpenAI from "openai";
+import crypto from "crypto";
 import path from "path";
 import { fileURLToPath } from "url";
 
 const app = express();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-app.use(express.json({ limit: "20mb" }));
+app.use(express.json({
+  limit: "20mb",
+  verify: (req, _res, buf) => {
+    req.rawBody = Buffer.from(buf);
+  }
+}));
 app.use(express.static(path.join(__dirname, "public")));
 
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
@@ -16,6 +22,7 @@ const ARBOX_SCHEDULE_URL = "https://arboxserver.arboxapp.com/api/public/v3/sched
 const ARBOX_MEMBERSHIPS_URL = "https://arboxserver.arboxapp.com/api/public/v3/membershipTypes";
 const ARBOX_LOCATION_ID = "21673";
 const META_GRAPH_VERSION = process.env.META_GRAPH_VERSION || "v25.0";
+const CHATWOOT_BASE_URL = String(process.env.CHATWOOT_BASE_URL || "https://app.chatwoot.com").replace(/\/$/, "");
 
 function cyprusToday() {
   return new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Nicosia", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
@@ -325,6 +332,78 @@ async function generateReply({ message = "", images = [], history = [], guidance
   return response.output_text;
 }
 
+function chatwootHeaders() {
+  const token = String(process.env.CHATWOOT_API_TOKEN || "").trim();
+  if (!token) throw new Error("CHATWOOT_API_TOKEN is missing.");
+  return { "Content-Type": "application/json", api_access_token: token };
+}
+
+function verifyChatwootWebhook(req) {
+  const secret = String(process.env.CHATWOOT_WEBHOOK_SECRET || "").trim();
+  if (!secret) return true;
+  const signature = String(req.get("X-Chatwoot-Signature") || "");
+  const timestamp = String(req.get("X-Chatwoot-Timestamp") || "");
+  if (!signature || !timestamp || !req.rawBody) return false;
+  const expected = `sha256=${crypto.createHmac("sha256", secret).update(`${timestamp}.${req.rawBody.toString("utf8")}`).digest("hex")}`;
+  const a = Buffer.from(signature);
+  const b = Buffer.from(expected);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+async function getChatwootConversationMessages(accountId, conversationId) {
+  const response = await fetch(`${CHATWOOT_BASE_URL}/api/v1/accounts/${accountId}/conversations/${conversationId}/messages`, {
+    method: "GET",
+    headers: chatwootHeaders()
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(`Chatwoot messages fetch failed: ${response.status} ${JSON.stringify(body)}`);
+  return Array.isArray(body?.payload) ? body.payload : [];
+}
+
+function buildChatwootHistory(messages, currentMessageId) {
+  const usable = messages
+    .filter((item) => item && !item.private && Number(item.id) !== Number(currentMessageId))
+    .filter((item) => [0, 1, "incoming", "outgoing"].includes(item.message_type))
+    .filter((item) => String(item.content || "").trim())
+    .slice(-16);
+
+  const turns = [];
+  let pendingCustomer = "";
+  for (const item of usable) {
+    const type = item.message_type;
+    const content = String(item.content || "").trim();
+    const incoming = type === 0 || type === "incoming";
+    const outgoing = type === 1 || type === "outgoing";
+    if (incoming) {
+      pendingCustomer = pendingCustomer ? `${pendingCustomer}\n${content}` : content;
+    } else if (outgoing) {
+      if (pendingCustomer) {
+        turns.push({ customer: pendingCustomer, reply: content });
+        pendingCustomer = "";
+      }
+    }
+  }
+  if (pendingCustomer) turns.push({ customer: pendingCustomer, reply: "" });
+  return turns.slice(-8);
+}
+
+async function addChatwootPrivateNote(accountId, conversationId, reply) {
+  const response = await fetch(`${CHATWOOT_BASE_URL}/api/v1/accounts/${accountId}/conversations/${conversationId}/messages`, {
+    method: "POST",
+    headers: chatwootHeaders(),
+    body: JSON.stringify({
+      content: `✨ AI suggested reply\n\n${reply}`,
+      message_type: "outgoing",
+      private: true,
+      content_type: "text",
+      content_attributes: { source: "be_studios_copilot" }
+    })
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(`Chatwoot private note failed: ${response.status} ${JSON.stringify(body)}`);
+  return body;
+}
+
 async function sendWhatsAppText({ to, body, phoneNumberId }) {
   const accessToken = String(process.env.WHATSAPP_ACCESS_TOKEN || "").trim();
   if (!accessToken) throw new Error("WHATSAPP_ACCESS_TOKEN is missing.");
@@ -380,6 +459,32 @@ app.post("/api/refine", async (req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: "Could not revise the reply." });
+  }
+});
+
+app.post("/api/chatwoot/webhook", async (req, res) => {
+  try {
+    if (!verifyChatwootWebhook(req)) return res.status(401).json({ error: "Invalid Chatwoot webhook signature." });
+
+    const body = req.body || {};
+    if (body.event !== "message_created") return res.sendStatus(200);
+    if (body.private === true) return res.sendStatus(200);
+    if (!(body.message_type === "incoming" || body.message_type === 0)) return res.sendStatus(200);
+
+    const message = String(body.content || "").trim();
+    const accountId = Number(body.account?.id || body.account_id || 0);
+    const conversationId = Number(body.conversation?.id || body.conversation_id || 0);
+    if (!message || !accountId || !conversationId) return res.sendStatus(200);
+
+    const messages = await getChatwootConversationMessages(accountId, conversationId);
+    const history = buildChatwootHistory(messages, body.id);
+    const reply = await generateReply({ message, history });
+    if (reply) await addChatwootPrivateNote(accountId, conversationId, reply);
+
+    return res.sendStatus(200);
+  } catch (error) {
+    console.error("Chatwoot webhook error", error);
+    return res.sendStatus(500);
   }
 });
 
