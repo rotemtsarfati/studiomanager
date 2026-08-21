@@ -6,12 +6,38 @@ function dashboardTokenValid(req) {
   return Boolean(expected && provided && expected === provided);
 }
 
-function latestSuggestion(messages) {
-  return [...messages]
-    .filter((item) => item?.private === true && String(item?.content || "").includes("✨ AI suggested reply"))
-    .sort((a, b) => Number(b?.created_at || b?.id || 0) - Number(a?.created_at || a?.id || 0))
-    .map((item) => String(item.content || "").replace(/^✨ AI suggested reply\s*/u, "").trim())
-    .find(Boolean) || "";
+function messageTime(item) {
+  const created = Number(item?.created_at || 0);
+  if (created > 0) return created;
+  return Number(item?.id || 0);
+}
+
+function isIncoming(item) {
+  return item?.private !== true && (item?.message_type === 0 || item?.message_type === "incoming");
+}
+
+function isAiSuggestion(item) {
+  return item?.private === true && String(item?.content || "").includes("✨ AI suggested reply");
+}
+
+function latestSuggestionForLatestCustomerMessage(messages) {
+  const latestIncoming = [...messages].filter(isIncoming).sort((a, b) => messageTime(b) - messageTime(a))[0];
+  if (!latestIncoming) return { suggestion: "", pending: false };
+
+  const latestIncomingTime = messageTime(latestIncoming);
+  const suggestion = [...messages]
+    .filter(isAiSuggestion)
+    .filter((item) => messageTime(item) >= latestIncomingTime)
+    .sort((a, b) => messageTime(b) - messageTime(a))[0];
+
+  if (!suggestion) return { suggestion: "", pending: true, latest_message_id: latestIncoming.id };
+
+  return {
+    suggestion: String(suggestion.content || "").replace(/^✨ AI suggested reply\s*/u, "").trim(),
+    pending: false,
+    latest_message_id: latestIncoming.id,
+    suggestion_message_id: suggestion.id
+  };
 }
 
 export default async function handler(req, res) {
@@ -33,7 +59,7 @@ export default async function handler(req, res) {
     if (!response.ok) return res.status(502).json({ error: `Chatwoot fetch failed (${response.status}).` });
 
     const messages = Array.isArray(body?.payload) ? body.payload : [];
-    return res.status(200).json({ suggestion: latestSuggestion(messages) });
+    return res.status(200).json(latestSuggestionForLatestCustomerMessage(messages));
   } catch (error) {
     console.error("Dashboard suggestion error", error);
     return res.status(500).json({ error: "Could not load the AI suggestion." });
