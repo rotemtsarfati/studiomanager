@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Be Studios AI Reply</title>
+  <style>
+    :root { font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #1f2937; background: #faf9f6; }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 16px; }
+    .card { background: white; border: 1px solid #e5e7eb; border-radius: 16px; padding: 16px; box-shadow: 0 8px 24px rgba(0,0,0,.06); }
+    h1 { font-size: 18px; margin: 0 0 6px; }
+    p { margin: 0 0 12px; color: #6b7280; font-size: 13px; line-height: 1.4; }
+    textarea { width: 100%; min-height: 190px; resize: vertical; border: 1px solid #d1d5db; border-radius: 12px; padding: 12px; font: inherit; line-height: 1.45; background: #fff; }
+    textarea:focus { outline: 2px solid #111827; outline-offset: 1px; }
+    .row { display: flex; gap: 10px; margin-top: 12px; }
+    button { border: 0; border-radius: 999px; padding: 11px 16px; font-weight: 700; cursor: pointer; }
+    #send { background: #111827; color: white; flex: 1; }
+    #reload { background: #f3f4f6; color: #111827; }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+    #status { margin-top: 10px; font-size: 13px; min-height: 18px; }
+    .ok { color: #047857; }
+    .error { color: #b91c1c; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>✨ AI suggested reply</h1>
+    <p>Edit anything you want, then send only when you're ready.</p>
+    <textarea id="reply" placeholder="Waiting for the conversation…"></textarea>
+    <div class="row">
+      <button id="reload" type="button">Refresh</button>
+      <button id="send" type="button" disabled>Send reply</button>
+    </div>
+    <div id="status"></div>
+  </div>
+
+  <script>
+    const params = new URLSearchParams(location.search);
+    const token = params.get('token') || '';
+    const replyBox = document.getElementById('reply');
+    const sendButton = document.getElementById('send');
+    const reloadButton = document.getElementById('reload');
+    const statusBox = document.getElementById('status');
+    let context = null;
+
+    function setStatus(text, type = '') {
+      statusBox.textContent = text;
+      statusBox.className = type;
+    }
+
+    function normalizeEventData(raw) {
+      if (typeof raw === 'string') {
+        try { return JSON.parse(raw); } catch { return null; }
+      }
+      return raw && typeof raw === 'object' ? raw : null;
+    }
+
+    async function loadSuggestion() {
+      const conversation = context?.data?.conversation;
+      if (!conversation?.id || !conversation?.account_id) {
+        setStatus('Open a Chatwoot conversation first.');
+        return;
+      }
+      setStatus('Loading suggestion…');
+      sendButton.disabled = true;
+      try {
+        const url = new URL('/api/chatwoot/suggestion', location.origin);
+        url.searchParams.set('account_id', conversation.account_id);
+        url.searchParams.set('conversation_id', conversation.id);
+        const response = await fetch(url, { headers: { 'x-dashboard-token': token } });
+        const body = await response.json();
+        if (!response.ok) throw new Error(body.error || 'Could not load suggestion.');
+        replyBox.value = body.suggestion || '';
+        sendButton.disabled = !replyBox.value.trim();
+        setStatus(body.suggestion ? 'Ready to edit and send.' : 'No AI suggestion found yet.');
+      } catch (error) {
+        setStatus(error.message || 'Could not load suggestion.', 'error');
+      }
+    }
+
+    window.addEventListener('message', (event) => {
+      const data = normalizeEventData(event.data);
+      if (!data || data.event !== 'appContext') return;
+      context = data;
+      loadSuggestion();
+    });
+
+    replyBox.addEventListener('input', () => {
+      sendButton.disabled = !replyBox.value.trim();
+    });
+
+    reloadButton.addEventListener('click', loadSuggestion);
+
+    sendButton.addEventListener('click', async () => {
+      const conversation = context?.data?.conversation;
+      const content = replyBox.value.trim();
+      if (!conversation?.id || !conversation?.account_id || !content) return;
+      if (!confirm('Send this reply to the customer?')) return;
+
+      sendButton.disabled = true;
+      setStatus('Sending…');
+      try {
+        const response = await fetch('/api/chatwoot/send-suggestion', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-dashboard-token': token },
+          body: JSON.stringify({ account_id: conversation.account_id, conversation_id: conversation.id, content })
+        });
+        const body = await response.json();
+        if (!response.ok) throw new Error(body.error || 'Could not send reply.');
+        setStatus('Sent ✓', 'ok');
+      } catch (error) {
+        setStatus(error.message || 'Could not send reply.', 'error');
+        sendButton.disabled = false;
+      }
+    });
+
+    window.parent.postMessage('chatwoot-dashboard-app:fetch-info', '*');
+  </script>
+</body>
+</html>
