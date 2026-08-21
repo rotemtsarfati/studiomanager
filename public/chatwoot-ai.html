@@ -5,33 +5,49 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Be Studios AI Reply</title>
   <style>
-    :root { font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #1f2937; background: #faf9f6; }
-    * { box-sizing: border-box; }
-    body { margin: 0; padding: 16px; }
-    .card { background: white; border: 1px solid #e5e7eb; border-radius: 16px; padding: 16px; box-shadow: 0 8px 24px rgba(0,0,0,.06); }
-    h1 { font-size: 18px; margin: 0 0 6px; }
-    p { margin: 0 0 12px; color: #6b7280; font-size: 13px; line-height: 1.4; }
-    textarea { width: 100%; min-height: 190px; resize: vertical; border: 1px solid #d1d5db; border-radius: 12px; padding: 12px; font: inherit; line-height: 1.45; background: #fff; }
-    textarea:focus { outline: 2px solid #111827; outline-offset: 1px; }
-    .row { display: flex; gap: 10px; margin-top: 12px; }
-    button { border: 0; border-radius: 999px; padding: 11px 16px; font-weight: 700; cursor: pointer; }
-    #send { background: #111827; color: white; flex: 1; }
-    #reload { background: #f3f4f6; color: #111827; }
-    button:disabled { opacity: .5; cursor: not-allowed; }
-    #status { margin-top: 10px; font-size: 13px; min-height: 18px; }
-    .ok { color: #047857; }
-    .error { color: #b91c1c; }
+    :root { font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color:#1f2937; background:#faf9f6; }
+    * { box-sizing:border-box; }
+    body { margin:0; padding:16px; }
+    .card { background:#fff; border:1px solid #e5e7eb; border-radius:16px; padding:16px; box-shadow:0 8px 24px rgba(0,0,0,.06); }
+    h1 { font-size:18px; margin:0 0 6px; }
+    h2 { font-size:14px; margin:18px 0 8px; }
+    p { margin:0 0 12px; color:#6b7280; font-size:13px; line-height:1.4; }
+    textarea { width:100%; resize:vertical; border:1px solid #d1d5db; border-radius:12px; padding:12px; font:inherit; line-height:1.45; background:#fff; }
+    #reply { min-height:170px; }
+    #feedback { min-height:90px; }
+    textarea:focus { outline:2px solid #111827; outline-offset:1px; }
+    .row { display:flex; gap:10px; margin-top:12px; align-items:center; }
+    button { border:0; border-radius:999px; padding:11px 16px; font-weight:700; cursor:pointer; }
+    #send { background:#111827; color:#fff; flex:1; }
+    #reload, #revise, #mic { background:#f3f4f6; color:#111827; }
+    #revise { flex:1; }
+    #mic.listening { background:#fee2e2; color:#991b1b; }
+    button:disabled { opacity:.5; cursor:not-allowed; }
+    #status { margin-top:10px; font-size:13px; min-height:18px; }
+    .ok { color:#047857; }
+    .error { color:#b91c1c; }
+    .hint { font-size:12px; color:#6b7280; margin-top:6px; }
   </style>
 </head>
 <body>
   <div class="card">
     <h1>✨ AI suggested reply</h1>
-    <p>Edit anything you want, then send only when you're ready.</p>
+    <p>Edit anything directly, or tell the AI what you want changed.</p>
+
     <textarea id="reply" placeholder="Waiting for the conversation…"></textarea>
+
     <div class="row">
       <button id="reload" type="button">Refresh</button>
       <button id="send" type="button" disabled>Send reply</button>
     </div>
+
+    <h2>Want the AI to change this reply?</h2>
+    <textarea id="feedback" placeholder="Type what you want changed — in Hebrew or English."></textarea>
+    <div class="row">
+      <button id="mic" type="button">🎙 Speak</button>
+      <button id="revise" type="button" disabled>Revise reply</button>
+    </div>
+    <div class="hint">You can speak or type. Nothing is sent to the customer until you press Send reply.</div>
     <div id="status"></div>
   </div>
 
@@ -39,44 +55,45 @@
     const params = new URLSearchParams(location.search);
     const token = params.get('token') || '';
     const replyBox = document.getElementById('reply');
+    const feedbackBox = document.getElementById('feedback');
     const sendButton = document.getElementById('send');
     const reloadButton = document.getElementById('reload');
+    const reviseButton = document.getElementById('revise');
+    const micButton = document.getElementById('mic');
     const statusBox = document.getElementById('status');
     let context = null;
+    let latestCustomerMessage = '';
+    let conversationHistory = [];
 
-    function setStatus(text, type = '') {
-      statusBox.textContent = text;
-      statusBox.className = type;
-    }
-
+    function setStatus(text, type = '') { statusBox.textContent = text; statusBox.className = type; }
     function normalizeEventData(raw) {
-      if (typeof raw === 'string') {
-        try { return JSON.parse(raw); } catch { return null; }
-      }
+      if (typeof raw === 'string') { try { return JSON.parse(raw); } catch { return null; } }
       return raw && typeof raw === 'object' ? raw : null;
     }
 
     async function loadSuggestion() {
       const conversation = context?.data?.conversation;
-      if (!conversation?.id || !conversation?.account_id) {
-        setStatus('Open a Chatwoot conversation first.');
-        return;
-      }
+      if (!conversation?.id || !conversation?.account_id) { setStatus('Open a Chatwoot conversation first.'); return; }
       setStatus('Loading suggestion…');
       sendButton.disabled = true;
+      reloadButton.disabled = true;
       try {
         const url = new URL('/api/chatwoot/suggestion', location.origin);
         url.searchParams.set('account_id', conversation.account_id);
         url.searchParams.set('conversation_id', conversation.id);
-        const response = await fetch(url, { headers: { 'x-dashboard-token': token } });
+        url.searchParams.set('_', Date.now());
+        const response = await fetch(url, { cache:'no-store', headers: { 'x-dashboard-token': token } });
         const body = await response.json();
         if (!response.ok) throw new Error(body.error || 'Could not load suggestion.');
         replyBox.value = body.suggestion || '';
+        latestCustomerMessage = body.latest_customer_message || '';
+        conversationHistory = Array.isArray(body.history) ? body.history : [];
         sendButton.disabled = !replyBox.value.trim();
-        setStatus(body.suggestion ? 'Ready to edit and send.' : 'No AI suggestion found yet.');
+        reviseButton.disabled = !replyBox.value.trim() || !feedbackBox.value.trim();
+        setStatus(body.suggestion ? 'Ready to edit, revise or send.' : 'No AI suggestion found yet.');
       } catch (error) {
         setStatus(error.message || 'Could not load suggestion.', 'error');
-      }
+      } finally { reloadButton.disabled = false; }
     }
 
     window.addEventListener('message', (event) => {
@@ -88,23 +105,71 @@
 
     replyBox.addEventListener('input', () => {
       sendButton.disabled = !replyBox.value.trim();
+      reviseButton.disabled = !replyBox.value.trim() || !feedbackBox.value.trim();
+    });
+    feedbackBox.addEventListener('input', () => {
+      reviseButton.disabled = !replyBox.value.trim() || !feedbackBox.value.trim();
+    });
+    reloadButton.addEventListener('click', loadSuggestion);
+
+    reviseButton.addEventListener('click', async () => {
+      const feedback = feedbackBox.value.trim();
+      const currentReply = replyBox.value.trim();
+      if (!feedback || !currentReply) return;
+      reviseButton.disabled = true;
+      setStatus('Revising…');
+      try {
+        const response = await fetch('/api/chat', {
+          method:'POST',
+          headers:{ 'Content-Type':'application/json' },
+          body:JSON.stringify({ message: latestCustomerMessage, history: conversationHistory, refinement:{ currentReply, feedback } })
+        });
+        const body = await response.json();
+        if (!response.ok) throw new Error(body.error || 'Could not revise reply.');
+        replyBox.value = body.reply || currentReply;
+        feedbackBox.value = '';
+        sendButton.disabled = !replyBox.value.trim();
+        reviseButton.disabled = true;
+        setStatus('Reply revised ✓', 'ok');
+      } catch (error) {
+        setStatus(error.message || 'Could not revise reply.', 'error');
+        reviseButton.disabled = false;
+      }
     });
 
-    reloadButton.addEventListener('click', loadSuggestion);
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (SpeechRecognition) {
+      const recognition = new SpeechRecognition();
+      recognition.continuous = false;
+      recognition.interimResults = false;
+      recognition.lang = 'he-IL';
+      recognition.onstart = () => { micButton.classList.add('listening'); micButton.textContent = '⏹ Listening…'; setStatus('Listening…'); };
+      recognition.onend = () => { micButton.classList.remove('listening'); micButton.textContent = '🎙 Speak'; };
+      recognition.onerror = () => setStatus('Voice input did not work. You can type the change instead.', 'error');
+      recognition.onresult = (event) => {
+        const text = Array.from(event.results).map(r => r[0].transcript).join(' ').trim();
+        feedbackBox.value = feedbackBox.value ? `${feedbackBox.value} ${text}` : text;
+        reviseButton.disabled = !replyBox.value.trim() || !feedbackBox.value.trim();
+        setStatus('Voice instruction added. Press Revise reply.');
+      };
+      micButton.addEventListener('click', () => { try { recognition.start(); } catch {} });
+    } else {
+      micButton.disabled = true;
+      micButton.title = 'Voice input is not supported in this browser.';
+    }
 
     sendButton.addEventListener('click', async () => {
       const conversation = context?.data?.conversation;
       const content = replyBox.value.trim();
       if (!conversation?.id || !conversation?.account_id || !content) return;
       if (!confirm('Send this reply to the customer?')) return;
-
       sendButton.disabled = true;
       setStatus('Sending…');
       try {
         const response = await fetch('/api/chatwoot/send-suggestion', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'x-dashboard-token': token },
-          body: JSON.stringify({ account_id: conversation.account_id, conversation_id: conversation.id, content })
+          method:'POST',
+          headers:{ 'Content-Type':'application/json', 'x-dashboard-token':token },
+          body:JSON.stringify({ account_id:conversation.account_id, conversation_id:conversation.id, content })
         });
         const body = await response.json();
         if (!response.ok) throw new Error(body.error || 'Could not send reply.');
