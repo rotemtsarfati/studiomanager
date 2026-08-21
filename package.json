@@ -1,1 +1,1 @@
-{"name":"be-studios-copilot","version":"0.1.0","private":true,"type":"module","scripts":{"start":"node patch-and-run.js","dev":"node --watch patch-and-run.js"},"dependencies":{"express":"^5.1.0","openai":"^5.12.2"},"engines":{"node":">=20"}}
+{"name":"be-studios-copilot","version":"0.1.0","private":true,"type":"module","scripts":{"start":"node bootstrap.js","dev":"node --watch bootstrap.js"},"dependencies":{"express":"^5.1.0","openai":"^5.12.2"},"engines":{"node":">=20"}}
