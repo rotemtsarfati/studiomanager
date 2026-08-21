@@ -16,28 +16,50 @@ function isIncoming(item) {
   return item?.private !== true && (item?.message_type === 0 || item?.message_type === "incoming");
 }
 
+function isOutgoing(item) {
+  return item?.private !== true && (item?.message_type === 1 || item?.message_type === "outgoing");
+}
+
 function isAiSuggestion(item) {
   return item?.private === true && String(item?.content || "").includes("✨ AI suggested reply");
 }
 
-function latestSuggestionForLatestCustomerMessage(messages) {
-  const latestIncoming = [...messages].filter(isIncoming).sort((a, b) => messageTime(b) - messageTime(a))[0];
-  if (!latestIncoming) return { suggestion: "", pending: false };
+function buildHistory(messages, currentMessageId) {
+  const usable = [...messages]
+    .filter((item) => item && item?.private !== true && Number(item?.id) !== Number(currentMessageId))
+    .filter((item) => (isIncoming(item) || isOutgoing(item)) && String(item?.content || "").trim())
+    .sort((a, b) => messageTime(a) - messageTime(b))
+    .slice(-16);
 
-  const latestIncomingTime = messageTime(latestIncoming);
-  const suggestion = [...messages]
-    .filter(isAiSuggestion)
-    .filter((item) => messageTime(item) >= latestIncomingTime)
-    .sort((a, b) => messageTime(b) - messageTime(a))[0];
+  const turns = [];
+  let pendingCustomer = "";
+  for (const item of usable) {
+    const content = String(item.content || "").trim();
+    if (isIncoming(item)) {
+      pendingCustomer = pendingCustomer ? `${pendingCustomer}\n${content}` : content;
+    } else if (isOutgoing(item) && pendingCustomer) {
+      turns.push({ customer: pendingCustomer, reply: content });
+      pendingCustomer = "";
+    }
+  }
+  if (pendingCustomer) turns.push({ customer: pendingCustomer, reply: "" });
+  return turns.slice(-8);
+}
 
-  if (!suggestion) return { suggestion: "", pending: true, latest_message_id: latestIncoming.id };
-
-  return {
-    suggestion: String(suggestion.content || "").replace(/^✨ AI suggested reply\s*/u, "").trim(),
-    pending: false,
-    latest_message_id: latestIncoming.id,
-    suggestion_message_id: suggestion.id
-  };
+async function generateOnDemand(req, latestIncoming, messages) {
+  const host = String(req.headers?.host || "studiomanager-blush.vercel.app");
+  const proto = String(req.headers?.["x-forwarded-proto"] || "https").split(",")[0].trim() || "https";
+  const response = await fetch(`${proto}://${host}/api/chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      message: String(latestIncoming?.content || "").trim(),
+      history: buildHistory(messages, latestIncoming?.id)
+    })
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(`AI generation failed (${response.status}).`);
+  return String(body?.reply || "").trim();
 }
 
 export default async function handler(req, res) {
@@ -59,9 +81,34 @@ export default async function handler(req, res) {
     if (!response.ok) return res.status(502).json({ error: `Chatwoot fetch failed (${response.status}).` });
 
     const messages = Array.isArray(body?.payload) ? body.payload : [];
-    return res.status(200).json(latestSuggestionForLatestCustomerMessage(messages));
+    const latestIncoming = [...messages].filter(isIncoming).sort((a, b) => messageTime(b) - messageTime(a))[0];
+    if (!latestIncoming) return res.status(200).json({ suggestion: "", pending: false });
+
+    const latestIncomingTime = messageTime(latestIncoming);
+    const freshNote = [...messages]
+      .filter(isAiSuggestion)
+      .filter((item) => messageTime(item) >= latestIncomingTime)
+      .sort((a, b) => messageTime(b) - messageTime(a))[0];
+
+    if (freshNote) {
+      return res.status(200).json({
+        suggestion: String(freshNote.content || "").replace(/^✨ AI suggested reply\s*/u, "").trim(),
+        pending: false,
+        latest_message_id: latestIncoming.id,
+        suggestion_message_id: freshNote.id,
+        source: "private_note"
+      });
+    }
+
+    const suggestion = await generateOnDemand(req, latestIncoming, messages);
+    return res.status(200).json({
+      suggestion,
+      pending: false,
+      latest_message_id: latestIncoming.id,
+      source: "generated_on_demand"
+    });
   } catch (error) {
     console.error("Dashboard suggestion error", error);
-    return res.status(500).json({ error: "Could not load the AI suggestion." });
+    return res.status(500).json({ error: "Could not load or generate the AI suggestion." });
   }
 }
