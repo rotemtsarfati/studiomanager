@@ -21,7 +21,7 @@
     #send { background:#111827; color:#fff; flex:1; }
     #reload, #revise, #mic, #uploadButton, #generateFromImage { background:#f3f4f6; color:#111827; }
     #revise { flex:1; }
-    #mic.listening { background:#fee2e2; color:#991b1b; }
+    #mic.active { background:#e0f2fe; color:#075985; }
     button:disabled { opacity:.5; cursor:not-allowed; }
     #status { margin:16px auto 0; min-height:26px; text-align:center; font-size:16px; font-weight:800; line-height:1.35; }
     #status.ok { color:#047857; font-size:18px; }
@@ -71,7 +71,7 @@
       <button id="mic" type="button">🎙 Speak</button>
       <button id="revise" type="button" disabled>Revise reply</button>
     </div>
-    <div class="hint">You can speak or type. Nothing is sent to the customer until you press Send reply.</div>
+    <div class="hint">Tap Speak, record your instruction, then press Revise reply. Nothing is sent until you press Send reply.</div>
     <div id="sentState" class="sentState">✓ Message sent successfully</div>
     <div id="status"></div>
   </div>
@@ -98,6 +98,7 @@
     let conversationHistory = [];
     let screenshotData = '';
     let sentForCurrentDraft = false;
+    let voiceWindow = null;
 
     function setStatus(text, type = '') { statusBox.textContent = text; statusBox.className = type; }
     function normalizeEventData(raw) {
@@ -110,6 +111,9 @@
     }
     function setDraft(reply) {
       resetSentState();
+      replyBox.readOnly = false;
+      feedbackBox.disabled = false;
+      micButton.disabled = false;
       replyBox.value = reply || '';
       sendButton.disabled = !replyBox.value.trim();
       reviseButton.disabled = !replyBox.value.trim() || !feedbackBox.value.trim();
@@ -139,6 +143,18 @@
     }
 
     window.addEventListener('message', (event) => {
+      if (event.origin === location.origin && event.data?.event === 'be-studios-voice-transcript') {
+        const text = String(event.data.text || '').trim();
+        if (text) {
+          feedbackBox.value = feedbackBox.value ? `${feedbackBox.value} ${text}` : text;
+          reviseButton.disabled = sentForCurrentDraft || !replyBox.value.trim() || !feedbackBox.value.trim();
+          micButton.classList.remove('active');
+          micButton.textContent = '🎙 Speak';
+          setStatus('Voice instruction added ✓ Press Revise reply.', 'ok');
+        }
+        return;
+      }
+
       const data = normalizeEventData(event.data);
       if (!data || data.event !== 'appContext') return;
       context = data;
@@ -153,7 +169,12 @@
     feedbackBox.addEventListener('input', () => {
       reviseButton.disabled = sentForCurrentDraft || !replyBox.value.trim() || !feedbackBox.value.trim();
     });
-    reloadButton.addEventListener('click', loadSuggestion);
+    reloadButton.addEventListener('click', () => {
+      replyBox.readOnly = false;
+      feedbackBox.disabled = false;
+      micButton.disabled = false;
+      loadSuggestion();
+    });
 
     uploadButton.addEventListener('click', () => screenshotInput.click());
     screenshotInput.addEventListener('change', () => {
@@ -195,6 +216,19 @@
       }
     });
 
+    micButton.addEventListener('click', () => {
+      if (sentForCurrentDraft) return;
+      voiceWindow = window.open('/voice-dictation.html', 'beStudiosVoice', 'width=430,height=520,resizable=yes,scrollbars=yes');
+      if (!voiceWindow) {
+        setStatus('Please allow pop-ups for this site so voice input can open.', 'error');
+        return;
+      }
+      micButton.classList.add('active');
+      micButton.textContent = '🎙 Voice window open';
+      setStatus('Record your instruction in the voice window. It will return here as text.', 'busy');
+      voiceWindow.focus();
+    });
+
     reviseButton.addEventListener('click', async () => {
       const feedback = feedbackBox.value.trim();
       const currentReply = replyBox.value.trim();
@@ -218,27 +252,6 @@
         reviseButton.disabled = false;
       }
     });
-
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (SpeechRecognition) {
-      const recognition = new SpeechRecognition();
-      recognition.continuous = false;
-      recognition.interimResults = false;
-      recognition.lang = 'he-IL';
-      recognition.onstart = () => { micButton.classList.add('listening'); micButton.textContent = '⏹ Listening…'; setStatus('🎙 Listening…', 'busy'); };
-      recognition.onend = () => { micButton.classList.remove('listening'); micButton.textContent = '🎙 Speak'; };
-      recognition.onerror = () => setStatus('Voice input did not work. You can type the change instead.', 'error');
-      recognition.onresult = (event) => {
-        const text = Array.from(event.results).map(r => r[0].transcript).join(' ').trim();
-        feedbackBox.value = feedbackBox.value ? `${feedbackBox.value} ${text}` : text;
-        reviseButton.disabled = !replyBox.value.trim() || !feedbackBox.value.trim();
-        setStatus('Voice instruction added. Press Revise reply.');
-      };
-      micButton.addEventListener('click', () => { try { recognition.start(); } catch {} });
-    } else {
-      micButton.disabled = true;
-      micButton.title = 'Voice input is not supported in this browser.';
-    }
 
     sendButton.addEventListener('click', async () => {
       const conversation = context?.data?.conversation;
@@ -278,13 +291,6 @@
         reviseButton.disabled = !content || !feedbackBox.value.trim();
         setStatus(error.message || 'Could not send reply.', 'error');
       }
-    });
-
-    reloadButton.addEventListener('click', () => {
-      replyBox.readOnly = false;
-      feedbackBox.disabled = false;
-      micButton.disabled = !SpeechRecognition;
-      loadSuggestion();
     });
 
     window.parent.postMessage('chatwoot-dashboard-app:fetch-info', '*');
