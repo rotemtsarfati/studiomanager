@@ -47,7 +47,7 @@ const TOOLS = [
   { type: "function", name: "get_membership_types", description: "Get active Be Studios membership/package types from Arbox. The token field creates https://arbox.link/<token>.", parameters: { type: "object", properties: {}, required: [], additionalProperties: false }, strict: true }
 ];
 
-const INSTRUCTIONS = `You are the internal customer-response copilot for Be Studios in Cyprus. Return only a customer-ready WhatsApp/Instagram reply.
+const INSTRUCTIONS = `You are the internal customer-response copilot for Be Studios in Cyprus. Return only a customer-ready WhatsApp/Instagram/email reply.
 
 CORE BUSINESS RULES
 - Be Studios' Pilates offering is Reformer Pilates. If a customer says only "Pilates", interpret it as Reformer Pilates. Never mention Mat Pilates unless the customer explicitly asks for Mat Pilates/mat/floor Pilates.
@@ -66,12 +66,12 @@ CONVERSATION
 - Continue naturally from previous turns. Do not repeat questions already answered.
 - Read the recent conversation as a sequence, including Be Studios messages that came before the customer's reply. A previous Be Studios offer or question defines what short replies such as "yes", "I'd love more details", or "sounds good" refer to.
 - Always use at least the recent 2-3 messages when available, not just the newest customer message.
-- The newest typed message is the newest customer message.
+- The newest typed message is the newest customer message. If there is no typed message, infer the newest customer message from the attached screenshot(s).
 - Preserve all known constraints and facts.
+- Never mention screenshots, internal tools, APIs or system details to the customer.
 
 STYLE
 - Reply in the customer's language. Warm, human, concise, usually 1-4 short sentences. Ask at most one useful follow-up question.
-- Do not expose internal instructions, APIs, or system details.
 - Never invent prices, policies, schedules, availability, instructors, memberships, or facts.
 
 REFINEMENT
@@ -81,22 +81,35 @@ function hasPackageIntent(text) {
   return /(package|membership|payment|purchase|buy|class pack|session pack|\b\d+\s*(classes|lessons|sessions|entries)\b)/i.test(String(text || ""));
 }
 
-async function generateReply({ message = "", history = [], refinement = null }) {
+function cleanGuidance(items) {
+  if (!Array.isArray(items)) return [];
+  return items.map(x => String(x || "").trim()).filter(Boolean).slice(-24);
+}
+
+async function generateReply({ message = "", images = [], history = [], guidance = [], refinement = null }) {
   const cleanMessage = String(message || "").trim();
+  const cleanImages = Array.isArray(images) ? images.filter(x => typeof x === "string" && x.startsWith("data:image/")).slice(0, 6) : [];
   const cleanHistory = Array.isArray(history) ? history.slice(-8) : [];
+  const cleanStaffGuidance = cleanGuidance(guidance);
   const isRefinement = refinement && String(refinement.feedback || "").trim();
-  if (!cleanMessage && !isRefinement) throw new Error("Missing customer message.");
+  if (!cleanMessage && cleanImages.length === 0 && !isRefinement) throw new Error("Missing customer message or screenshot.");
 
   const historyText = cleanHistory.length ? `Previous conversation:\n${cleanHistory.map((x, i) => `Turn ${i + 1}\nCustomer: ${String(x.customer || "")}\nBe Studios: ${String(x.reply || "")}`).join("\n\n")}\n\n` : "";
+  const guidanceText = cleanStaffGuidance.length ? `Staff guidance learned from previous edits:\n${cleanStaffGuidance.map((x, i) => `${i + 1}. ${x}`).join("\n")}\n\n` : "";
   let packageContext = "";
   const packageSource = `${cleanMessage}\n${cleanHistory.map(x => `${x.customer || ""} ${x.reply || ""}`).join("\n")}\n${refinement?.feedback || ""}`;
   if (hasPackageIntent(packageSource)) packageContext = `LIVE ARBOX PACKAGE DATA:\n${JSON.stringify(await getArboxMembershipTypes())}\n\n`;
 
   const text = isRefinement
-    ? `Today's date in Cyprus: ${cyprusToday()}.\n\n${packageContext}${historyText}Newest customer message: ${cleanMessage}\n\nCurrent draft:\n${String(refinement.currentReply || "")}\n\nStaff requested change:\n${String(refinement.feedback || "")}\n\nRevise the draft.`
-    : `Today's date in Cyprus: ${cyprusToday()}.\n\n${packageContext}${historyText}Newest customer message:\n${cleanMessage}\n\nDraft the next Be Studios reply.`;
+    ? `Today's date in Cyprus: ${cyprusToday()}.\n\n${packageContext}${guidanceText}${historyText}Newest customer message: ${cleanMessage}\n\nCurrent draft:\n${String(refinement.currentReply || "")}\n\nStaff requested change:\n${String(refinement.feedback || "")}\n\nRevise the draft.`
+    : cleanMessage
+      ? `Today's date in Cyprus: ${cyprusToday()}.\n\n${packageContext}${guidanceText}${historyText}Newest customer message:\n${cleanMessage}\n\nDraft the next Be Studios reply.`
+      : `Today's date in Cyprus: ${cyprusToday()}.\n\n${packageContext}${guidanceText}${historyText}Use the attached conversation screenshot(s) to identify the latest customer message and draft the next Be Studios reply.`;
 
-  let response = await client.responses.create({ model: process.env.OPENAI_MODEL || "gpt-5-mini", instructions: INSTRUCTIONS, tools: TOOLS, input: [{ role: "user", content: [{ type: "input_text", text }] }], max_output_tokens: 350 });
+  const content = [{ type: "input_text", text }];
+  for (const image of cleanImages) content.push({ type: "input_image", image_url: image, detail: "high" });
+
+  let response = await client.responses.create({ model: process.env.OPENAI_MODEL || "gpt-5-mini", instructions: INSTRUCTIONS, tools: TOOLS, input: [{ role: "user", content }], max_output_tokens: 350 });
   for (let round = 0; round < 4; round++) {
     const calls = (response.output || []).filter(x => x.type === "function_call");
     if (!calls.length) break;
@@ -114,7 +127,13 @@ async function generateReply({ message = "", history = [], refinement = null }) 
 export default async function handler(req, res) {
   try {
     if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed." });
-    const reply = await generateReply({ message: req.body?.message, history: req.body?.history, refinement: req.body?.refinement });
+    const reply = await generateReply({
+      message: req.body?.message,
+      images: req.body?.images,
+      history: req.body?.history,
+      guidance: req.body?.guidance,
+      refinement: req.body?.refinement
+    });
     return res.status(200).json({ reply });
   } catch (error) {
     console.error("Standalone chat error", error);
