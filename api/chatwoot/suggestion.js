@@ -20,30 +20,20 @@ function isOutgoing(item) {
   return item?.private !== true && (item?.message_type === 1 || item?.message_type === "outgoing");
 }
 
-function isAiSuggestion(item) {
-  return item?.private === true && String(item?.content || "").includes("✨ AI suggested reply");
-}
-
 function buildHistory(messages, currentMessageId) {
-  const usable = [...messages]
+  // Preserve the actual recent sequence, including a proactive Be Studios message
+  // that may have started the conversation before the customer's first reply.
+  // The previous implementation dropped outgoing messages unless they followed
+  // an incoming customer message, which lost context such as a free-trial offer.
+  return [...messages]
     .filter((item) => item && item?.private !== true && Number(item?.id) !== Number(currentMessageId))
     .filter((item) => (isIncoming(item) || isOutgoing(item)) && String(item?.content || "").trim())
     .sort((a, b) => messageTime(a) - messageTime(b))
-    .slice(-16);
-
-  const turns = [];
-  let pendingCustomer = "";
-  for (const item of usable) {
-    const content = String(item.content || "").trim();
-    if (isIncoming(item)) {
-      pendingCustomer = pendingCustomer ? `${pendingCustomer}\n${content}` : content;
-    } else if (isOutgoing(item) && pendingCustomer) {
-      turns.push({ customer: pendingCustomer, reply: content });
-      pendingCustomer = "";
-    }
-  }
-  if (pendingCustomer) turns.push({ customer: pendingCustomer, reply: "" });
-  return turns.slice(-8);
+    .slice(-6)
+    .map((item) => ({
+      customer: isIncoming(item) ? String(item.content || "").trim() : "",
+      reply: isOutgoing(item) ? String(item.content || "").trim() : ""
+    }));
 }
 
 async function generateOnDemand(req, latestIncoming, history) {
@@ -85,24 +75,10 @@ export default async function handler(req, res) {
 
     const history = buildHistory(messages, latestIncoming.id);
     const latestCustomerMessage = String(latestIncoming.content || "").trim();
-    const latestIncomingTime = messageTime(latestIncoming);
-    const freshNote = [...messages]
-      .filter(isAiSuggestion)
-      .filter((item) => messageTime(item) >= latestIncomingTime)
-      .sort((a, b) => messageTime(b) - messageTime(a))[0];
 
-    if (freshNote) {
-      return res.status(200).json({
-        suggestion: String(freshNote.content || "").replace(/^✨ AI suggested reply\s*/u, "").trim(),
-        pending: false,
-        latest_message_id: latestIncoming.id,
-        latest_customer_message: latestCustomerMessage,
-        history,
-        suggestion_message_id: freshNote.id,
-        source: "private_note"
-      });
-    }
-
+    // Always generate from the current Chatwoot conversation state. This avoids
+    // reusing a private-note suggestion that may have been generated from only
+    // the latest message and therefore missed the preceding offer/context.
     const suggestion = await generateOnDemand(req, latestIncoming, history);
     return res.status(200).json({
       suggestion,
