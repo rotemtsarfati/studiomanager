@@ -20,29 +20,51 @@ function isOutgoing(item) {
   return item?.private !== true && (item?.message_type === 1 || item?.message_type === "outgoing");
 }
 
-function buildHistory(messages, currentMessageId) {
-  // Preserve the actual recent sequence, including a proactive Be Studios message
-  // that may have started the conversation before the customer's first reply.
-  // The previous implementation dropped outgoing messages unless they followed
-  // an incoming customer message, which lost context such as a free-trial offer.
-  return [...messages]
-    .filter((item) => item && item?.private !== true && Number(item?.id) !== Number(currentMessageId))
-    .filter((item) => (isIncoming(item) || isOutgoing(item)) && String(item?.content || "").trim())
-    .sort((a, b) => messageTime(a) - messageTime(b))
-    .slice(-6)
-    .map((item) => ({
-      customer: isIncoming(item) ? String(item.content || "").trim() : "",
-      reply: isOutgoing(item) ? String(item.content || "").trim() : ""
-    }));
+function isUnavailableText(value) {
+  const text = String(value || "").trim().toLowerCase();
+  return !text || text === "unavailable" || text === "message unavailable" || text === "[unavailable]";
 }
 
-async function generateOnDemand(req, latestIncoming, history) {
+function extractMessageText(item) {
+  const direct = String(item?.content || "").trim();
+  if (!isUnavailableText(direct)) return direct;
+
+  const attrs = item?.content_attributes && typeof item.content_attributes === "object" ? item.content_attributes : {};
+  const candidates = [attrs.text, attrs.body, attrs.caption, attrs.message, attrs.content, attrs?.wa_message?.text?.body, attrs?.wa_message?.caption];
+  for (const value of candidates) {
+    const text = String(value || "").trim();
+    if (!isUnavailableText(text)) return text;
+  }
+
+  const attachments = Array.isArray(item?.attachments) ? item.attachments : [];
+  for (const attachment of attachments) {
+    const caption = String(attachment?.caption || attachment?.description || "").trim();
+    if (!isUnavailableText(caption)) return caption;
+  }
+  return "";
+}
+
+function buildHistory(messages, currentMessageId) {
+  return [...messages]
+    .filter((item) => item && item?.private !== true && Number(item?.id) !== Number(currentMessageId))
+    .filter((item) => isIncoming(item) || isOutgoing(item))
+    .sort((a, b) => messageTime(a) - messageTime(b))
+    .slice(-8)
+    .map((item) => ({
+      customer: isIncoming(item) ? extractMessageText(item) : "",
+      reply: isOutgoing(item) ? extractMessageText(item) : ""
+    }))
+    .filter((item) => item.customer || item.reply)
+    .slice(-6);
+}
+
+async function generateOnDemand(req, latestMessage, latestText, history) {
   const host = String(req.headers?.host || "studiomanager-blush.vercel.app");
   const proto = String(req.headers?.["x-forwarded-proto"] || "https").split(",")[0].trim() || "https";
   const response = await fetch(`${proto}://${host}/api/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message: String(latestIncoming?.content || "").trim(), history })
+    body: JSON.stringify({ message: latestText, history })
   });
   const body = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(`AI generation failed (${response.status}): ${body?.error || "unknown"}`);
@@ -73,13 +95,26 @@ export default async function handler(req, res) {
     const latestIncoming = [...messages].filter(isIncoming).sort((a, b) => messageTime(b) - messageTime(a))[0];
     if (!latestIncoming) return res.status(200).json({ suggestion: "", pending: false });
 
+    const latestCustomerMessage = extractMessageText(latestIncoming);
     const history = buildHistory(messages, latestIncoming.id);
-    const latestCustomerMessage = String(latestIncoming.content || "").trim();
 
-    // Always generate from the current Chatwoot conversation state. This avoids
-    // reusing a private-note suggestion that may have been generated from only
-    // the latest message and therefore missed the preceding offer/context.
-    const suggestion = await generateOnDemand(req, latestIncoming, history);
+    if (!latestCustomerMessage) {
+      console.warn("CHATWOOT_LATEST_MESSAGE_UNAVAILABLE", JSON.stringify({
+        account_id: accountId,
+        conversation_id: conversationId,
+        message_id: latestIncoming.id,
+        content_type: latestIncoming?.content_type,
+        has_attachments: Array.isArray(latestIncoming?.attachments) && latestIncoming.attachments.length > 0,
+        content_attribute_keys: Object.keys(latestIncoming?.content_attributes || {})
+      }));
+      return res.status(422).json({
+        error: "The latest WhatsApp message is marked unavailable in Chatwoot, so the AI cannot read its text yet. Refresh the conversation; if it stays unavailable, the issue is in the WhatsApp/Chatwoot sync rather than the AI agent.",
+        latest_message_id: latestIncoming.id,
+        history
+      });
+    }
+
+    const suggestion = await generateOnDemand(req, latestIncoming, latestCustomerMessage, history);
     return res.status(200).json({
       suggestion,
       pending: false,
