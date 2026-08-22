@@ -19,14 +19,24 @@
     .row { display:flex; gap:10px; margin-top:12px; align-items:center; }
     button { border:0; border-radius:999px; padding:11px 16px; font-weight:700; cursor:pointer; }
     #send { background:#111827; color:#fff; flex:1; }
-    #reload, #revise, #mic { background:#f3f4f6; color:#111827; }
+    #reload, #revise, #mic, #uploadButton, #generateFromImage { background:#f3f4f6; color:#111827; }
     #revise { flex:1; }
     #mic.listening { background:#fee2e2; color:#991b1b; }
     button:disabled { opacity:.5; cursor:not-allowed; }
-    #status { margin-top:10px; font-size:13px; min-height:18px; }
-    .ok { color:#047857; }
-    .error { color:#b91c1c; }
+    #status { margin:16px auto 0; min-height:26px; text-align:center; font-size:16px; font-weight:800; line-height:1.35; }
+    #status.ok { color:#047857; font-size:18px; }
+    #status.error { color:#b91c1c; font-size:14px; }
+    #status.busy { color:#374151; }
     .hint { font-size:12px; color:#6b7280; margin-top:6px; }
+    .uploadBox { margin-top:16px; padding:12px; border:1px dashed #d1d5db; border-radius:12px; background:#fafafa; }
+    .uploadTitle { font-size:13px; font-weight:800; margin-bottom:4px; }
+    .uploadPreview { margin-top:10px; display:none; gap:10px; align-items:center; }
+    .uploadPreview.visible { display:flex; }
+    .uploadPreview img { width:64px; height:64px; object-fit:cover; border-radius:10px; border:1px solid #e5e7eb; }
+    .uploadMeta { font-size:12px; color:#6b7280; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    input[type=file] { display:none; }
+    .sentState { background:#ecfdf5; border:1px solid #a7f3d0; border-radius:12px; padding:12px; text-align:center; margin-top:12px; font-weight:800; color:#047857; display:none; }
+    .sentState.visible { display:block; }
   </style>
 </head>
 <body>
@@ -41,6 +51,20 @@
       <button id="send" type="button" disabled>Send reply</button>
     </div>
 
+    <div class="uploadBox">
+      <div class="uploadTitle">WhatsApp message missing or unavailable?</div>
+      <div class="hint">Upload a screenshot of the conversation and the AI can create the reply from the image.</div>
+      <input id="screenshot" type="file" accept="image/*" />
+      <div class="row">
+        <button id="uploadButton" type="button">📷 Upload screenshot</button>
+        <button id="generateFromImage" type="button" disabled>Generate from screenshot</button>
+      </div>
+      <div id="uploadPreview" class="uploadPreview">
+        <img id="previewImage" alt="Conversation screenshot preview" />
+        <div id="uploadMeta" class="uploadMeta"></div>
+      </div>
+    </div>
+
     <h2>Want the AI to change this reply?</h2>
     <textarea id="feedback" placeholder="Type what you want changed — in Hebrew or English."></textarea>
     <div class="row">
@@ -48,6 +72,7 @@
       <button id="revise" type="button" disabled>Revise reply</button>
     </div>
     <div class="hint">You can speak or type. Nothing is sent to the customer until you press Send reply.</div>
+    <div id="sentState" class="sentState">✓ Message sent successfully</div>
     <div id="status"></div>
   </div>
 
@@ -61,20 +86,39 @@
     const reviseButton = document.getElementById('revise');
     const micButton = document.getElementById('mic');
     const statusBox = document.getElementById('status');
+    const screenshotInput = document.getElementById('screenshot');
+    const uploadButton = document.getElementById('uploadButton');
+    const generateFromImageButton = document.getElementById('generateFromImage');
+    const uploadPreview = document.getElementById('uploadPreview');
+    const previewImage = document.getElementById('previewImage');
+    const uploadMeta = document.getElementById('uploadMeta');
+    const sentState = document.getElementById('sentState');
     let context = null;
     let latestCustomerMessage = '';
     let conversationHistory = [];
+    let screenshotData = '';
+    let sentForCurrentDraft = false;
 
     function setStatus(text, type = '') { statusBox.textContent = text; statusBox.className = type; }
     function normalizeEventData(raw) {
       if (typeof raw === 'string') { try { return JSON.parse(raw); } catch { return null; } }
       return raw && typeof raw === 'object' ? raw : null;
     }
+    function resetSentState() {
+      sentForCurrentDraft = false;
+      sentState.classList.remove('visible');
+    }
+    function setDraft(reply) {
+      resetSentState();
+      replyBox.value = reply || '';
+      sendButton.disabled = !replyBox.value.trim();
+      reviseButton.disabled = !replyBox.value.trim() || !feedbackBox.value.trim();
+    }
 
     async function loadSuggestion() {
       const conversation = context?.data?.conversation;
       if (!conversation?.id || !conversation?.account_id) { setStatus('Open a Chatwoot conversation first.'); return; }
-      setStatus('Loading suggestion…');
+      setStatus('⏳ Loading suggestion…', 'busy');
       sendButton.disabled = true;
       reloadButton.disabled = true;
       try {
@@ -85,11 +129,9 @@
         const response = await fetch(url, { cache:'no-store', headers: { 'x-dashboard-token': token } });
         const body = await response.json();
         if (!response.ok) throw new Error(body.error || 'Could not load suggestion.');
-        replyBox.value = body.suggestion || '';
+        setDraft(body.suggestion || '');
         latestCustomerMessage = body.latest_customer_message || '';
         conversationHistory = Array.isArray(body.history) ? body.history : [];
-        sendButton.disabled = !replyBox.value.trim();
-        reviseButton.disabled = !replyBox.value.trim() || !feedbackBox.value.trim();
         setStatus(body.suggestion ? 'Ready to edit, revise or send.' : 'No AI suggestion found yet.');
       } catch (error) {
         setStatus(error.message || 'Could not load suggestion.', 'error');
@@ -104,20 +146,61 @@
     });
 
     replyBox.addEventListener('input', () => {
+      if (sentForCurrentDraft) return;
       sendButton.disabled = !replyBox.value.trim();
       reviseButton.disabled = !replyBox.value.trim() || !feedbackBox.value.trim();
     });
     feedbackBox.addEventListener('input', () => {
-      reviseButton.disabled = !replyBox.value.trim() || !feedbackBox.value.trim();
+      reviseButton.disabled = sentForCurrentDraft || !replyBox.value.trim() || !feedbackBox.value.trim();
     });
     reloadButton.addEventListener('click', loadSuggestion);
+
+    uploadButton.addEventListener('click', () => screenshotInput.click());
+    screenshotInput.addEventListener('change', () => {
+      const file = screenshotInput.files?.[0];
+      screenshotData = '';
+      generateFromImageButton.disabled = true;
+      uploadPreview.classList.remove('visible');
+      if (!file || !file.type.startsWith('image/')) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        screenshotData = String(reader.result || '');
+        previewImage.src = screenshotData;
+        uploadMeta.textContent = file.name;
+        uploadPreview.classList.add('visible');
+        generateFromImageButton.disabled = !screenshotData;
+        setStatus('Screenshot ready. Press Generate from screenshot.');
+      };
+      reader.readAsDataURL(file);
+    });
+
+    generateFromImageButton.addEventListener('click', async () => {
+      if (!screenshotData) return;
+      generateFromImageButton.disabled = true;
+      setStatus('⏳ Reading screenshot and creating reply…', 'busy');
+      try {
+        const response = await fetch('/api/chat', {
+          method:'POST',
+          headers:{ 'Content-Type':'application/json' },
+          body:JSON.stringify({ message:'', images:[screenshotData], history:conversationHistory })
+        });
+        const body = await response.json();
+        if (!response.ok) throw new Error(body.error || 'Could not create reply from screenshot.');
+        setDraft(body.reply || '');
+        setStatus('Reply created from screenshot ✓', 'ok');
+      } catch (error) {
+        setStatus(error.message || 'Could not create reply from screenshot.', 'error');
+      } finally {
+        generateFromImageButton.disabled = !screenshotData;
+      }
+    });
 
     reviseButton.addEventListener('click', async () => {
       const feedback = feedbackBox.value.trim();
       const currentReply = replyBox.value.trim();
-      if (!feedback || !currentReply) return;
+      if (!feedback || !currentReply || sentForCurrentDraft) return;
       reviseButton.disabled = true;
-      setStatus('Revising…');
+      setStatus('⏳ Revising…', 'busy');
       try {
         const response = await fetch('/api/chat', {
           method:'POST',
@@ -126,9 +209,8 @@
         });
         const body = await response.json();
         if (!response.ok) throw new Error(body.error || 'Could not revise reply.');
-        replyBox.value = body.reply || currentReply;
+        setDraft(body.reply || currentReply);
         feedbackBox.value = '';
-        sendButton.disabled = !replyBox.value.trim();
         reviseButton.disabled = true;
         setStatus('Reply revised ✓', 'ok');
       } catch (error) {
@@ -143,7 +225,7 @@
       recognition.continuous = false;
       recognition.interimResults = false;
       recognition.lang = 'he-IL';
-      recognition.onstart = () => { micButton.classList.add('listening'); micButton.textContent = '⏹ Listening…'; setStatus('Listening…'); };
+      recognition.onstart = () => { micButton.classList.add('listening'); micButton.textContent = '⏹ Listening…'; setStatus('🎙 Listening…', 'busy'); };
       recognition.onend = () => { micButton.classList.remove('listening'); micButton.textContent = '🎙 Speak'; };
       recognition.onerror = () => setStatus('Voice input did not work. You can type the change instead.', 'error');
       recognition.onresult = (event) => {
@@ -161,10 +243,15 @@
     sendButton.addEventListener('click', async () => {
       const conversation = context?.data?.conversation;
       const content = replyBox.value.trim();
-      if (!conversation?.id || !conversation?.account_id || !content) return;
+      if (!conversation?.id || !conversation?.account_id || !content || sentForCurrentDraft) return;
       if (!confirm('Send this reply to the customer?')) return;
+      sentForCurrentDraft = true;
       sendButton.disabled = true;
-      setStatus('Sending…');
+      reviseButton.disabled = true;
+      replyBox.readOnly = true;
+      feedbackBox.disabled = true;
+      micButton.disabled = true;
+      setStatus('⏳ Sending…', 'busy');
       try {
         const response = await fetch('/api/chatwoot/send-suggestion', {
           method:'POST',
@@ -173,11 +260,31 @@
         });
         const body = await response.json();
         if (!response.ok) throw new Error(body.error || 'Could not send reply.');
-        setStatus('Sent ✓', 'ok');
+
+        replyBox.value = '';
+        feedbackBox.value = '';
+        screenshotData = '';
+        screenshotInput.value = '';
+        uploadPreview.classList.remove('visible');
+        generateFromImageButton.disabled = true;
+        sentState.classList.add('visible');
+        setStatus('✓ SENT', 'ok');
       } catch (error) {
+        sentForCurrentDraft = false;
+        replyBox.readOnly = false;
+        feedbackBox.disabled = false;
+        micButton.disabled = false;
+        sendButton.disabled = !content;
+        reviseButton.disabled = !content || !feedbackBox.value.trim();
         setStatus(error.message || 'Could not send reply.', 'error');
-        sendButton.disabled = false;
       }
+    });
+
+    reloadButton.addEventListener('click', () => {
+      replyBox.readOnly = false;
+      feedbackBox.disabled = false;
+      micButton.disabled = !SpeechRecognition;
+      loadSuggestion();
     });
 
     window.parent.postMessage('chatwoot-dashboard-app:fetch-info', '*');
