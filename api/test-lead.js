@@ -12,12 +12,18 @@ function pickLeadArray(body) {
 
 function safeLead(lead) {
   if (!lead || typeof lead !== "object") return null;
-  const result = {};
-  for (const key of ["id", "lead_id", "status", "status_name", "lead_status", "created_at", "createdAt", "first_name", "last_name", "name", "phone", "phone_number", "mobile", "email", "location_id"]) {
-    if (lead[key] !== undefined) result[key] = lead[key];
-  }
-  result.available_keys = Object.keys(lead).sort();
-  return result;
+  return {
+    user_id: lead.user_id ?? lead.id ?? lead.lead_id ?? null,
+    first_name: lead.first_name ?? null,
+    last_name: lead.last_name ?? null,
+    lead_status: lead.lead_status ?? lead.status ?? lead.status_name ?? null,
+    lead_source: lead.lead_source ?? null,
+    created_time: lead.created_time ?? lead.created_at ?? lead.createdAt ?? null,
+    location_id: lead.location_id ?? null,
+    has_phone: Boolean(String(lead.phone ?? lead.phone_number ?? lead.mobile ?? "").trim()),
+    phone_last4: String(lead.phone ?? lead.phone_number ?? lead.mobile ?? "").replace(/\D/g, "").slice(-4) || null,
+    has_email: Boolean(String(lead.email ?? "").trim())
+  };
 }
 
 export default async function handler(req, res) {
@@ -37,25 +43,29 @@ export default async function handler(req, res) {
     if (!arboxResponse.ok) return res.status(502).json({ error: "Arbox leads fetch failed", status: arboxResponse.status, body });
 
     const leads = pickLeadArray(body);
-    const created = leads.filter((lead) => String(lead?.status || lead?.status_name || lead?.lead_status || "").trim().toLowerCase() === "created");
 
     let chatwootInbox = null;
     const cwToken = String(process.env.CHATWOOT_API_TOKEN || "").trim();
     if (cwToken) {
       const cw = await fetch(`${CHATWOOT_BASE_URL}/api/v1/accounts/163942/inboxes/108306`, { headers: { api_access_token: cwToken } });
       const cwBody = await cw.json().catch(() => ({}));
-      chatwootInbox = { ok: cw.ok, status: cw.status, channel: cwBody?.channel_type || cwBody?.channel?.type || null, phone_number: cwBody?.phone_number || cwBody?.channel?.phone_number || null, provider_config_keys: Object.keys(cwBody?.provider_config || cwBody?.channel?.provider_config || {}).sort() };
+      const providerConfig = cwBody?.provider_config || cwBody?.channel?.provider_config || {};
+      chatwootInbox = {
+        ok: cw.ok,
+        status: cw.status,
+        channel: cwBody?.channel_type || cwBody?.channel?.type || null,
+        phone_number: cwBody?.phone_number || cwBody?.channel?.phone_number || null,
+        has_phone_number_id: Boolean(String(providerConfig.phone_number_id || "").trim()),
+        has_provider_api_key: Boolean(String(providerConfig.api_key || "").trim())
+      };
     }
 
     return res.status(200).json({
       ok: true,
       total_found: leads.length,
-      created_count: created.length,
-      latest_created: safeLead(created[0] || null),
-      sample_latest: safeLead(leads[0] || null),
+      leads: leads.map(safeLead),
       env: {
         whatsapp_access_token: Boolean(String(process.env.WHATSAPP_ACCESS_TOKEN || "").trim()),
-        whatsapp_phone_number_id: Boolean(String(process.env.WHATSAPP_PHONE_NUMBER_ID || "").trim()),
         chatwoot_api_token: Boolean(cwToken)
       },
       chatwoot_inbox: chatwootInbox
