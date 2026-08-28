@@ -26,6 +26,13 @@ function safeLead(lead) {
   };
 }
 
+function timeValue(lead) {
+  const raw = String(lead?.created_time ?? lead?.created_at ?? lead?.createdAt ?? "").trim();
+  if (!raw) return 0;
+  const parsed = Date.parse(raw.replace(" ", "T"));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
 export default async function handler(req, res) {
   try {
     if (req.method !== "GET") return res.status(405).json({ error: "Method not allowed" });
@@ -33,7 +40,7 @@ export default async function handler(req, res) {
     if (!apiKey) return res.status(500).json({ error: "ARBOX_API_KEY missing" });
 
     const url = new URL(ARBOX_LEADS_URL);
-    url.searchParams.set("limit", "20");
+    url.searchParams.set("limit", "500");
     url.searchParams.set("page", "1");
     url.searchParams.set("location_id", ARBOX_LOCATION_ID);
 
@@ -43,6 +50,7 @@ export default async function handler(req, res) {
     if (!arboxResponse.ok) return res.status(502).json({ error: "Arbox leads fetch failed", status: arboxResponse.status, body });
 
     const leads = pickLeadArray(body);
+    const latest = [...leads].sort((a, b) => timeValue(b) - timeValue(a)).slice(0, 12);
 
     let chatwootInbox = null;
     const cwToken = String(process.env.CHATWOOT_API_TOKEN || "").trim();
@@ -63,7 +71,7 @@ export default async function handler(req, res) {
     return res.status(200).json({
       ok: true,
       total_found: leads.length,
-      leads: leads.map(safeLead),
+      latest: latest.map(safeLead),
       env: {
         whatsapp_access_token: Boolean(String(process.env.WHATSAPP_ACCESS_TOKEN || "").trim()),
         chatwoot_api_token: Boolean(cwToken)
