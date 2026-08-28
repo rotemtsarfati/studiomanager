@@ -45,7 +45,7 @@ async function getWhatsAppConfig() {
   if (!response.ok) throw new Error(`Chatwoot inbox fetch failed (${response.status})`);
   const provider = body?.provider_config || body?.channel?.provider_config || {};
   const phoneNumberId = String(provider.phone_number_id || "").trim();
-  const accessToken = String(process.env.WHATSAPP_ACCESS_TOKEN || provider.api_key || "").trim();
+  const accessToken = String(provider.api_key || process.env.WHATSAPP_ACCESS_TOKEN || "").trim();
   if (!phoneNumberId) throw new Error("WhatsApp phone_number_id missing");
   if (!accessToken) throw new Error("WhatsApp access token missing");
   return { phoneNumberId, accessToken };
