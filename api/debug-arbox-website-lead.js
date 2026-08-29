@@ -28,6 +28,24 @@ function maskPhone(value) {
   return `***${digits.slice(-4)}`;
 }
 
+function summarize(lead) {
+  const keys = Object.keys(lead || {});
+  const commentLike = {};
+  for (const key of keys) if (/comment|note|message/i.test(key)) commentLike[key] = lead[key];
+  return {
+    user_id: lead?.user_id ?? lead?.id ?? null,
+    lead_status: lead?.lead_status ?? lead?.status ?? null,
+    lead_source: lead?.lead_source ?? lead?.source ?? null,
+    created_time: lead?.created_time ?? lead?.created_at ?? null,
+    first_name: lead?.first_name ?? null,
+    last_name: lead?.last_name ?? null,
+    phone_masked: maskPhone(lead?.phone ?? lead?.phone_number ?? lead?.mobile),
+    email_masked: maskEmail(lead?.email),
+    all_keys: keys,
+    comment_like_fields: commentLike
+  };
+}
+
 export default async function handler(req, res) {
   try {
     if (req.method !== "GET") return res.status(405).json({ error: "Method not allowed" });
@@ -44,38 +62,30 @@ export default async function handler(req, res) {
     if (!response.ok) throw new Error(`Arbox leads fetch failed (${response.status})`);
 
     const leads = pickLeadArray(body).sort((a, b) => timeValue(b) - timeValue(a));
-    const websiteCandidates = leads.filter((lead) => {
+    const sources = [...new Set(leads.map((lead) => String(lead?.lead_source ?? lead?.source ?? "").trim()).filter(Boolean))];
+
+    const websiteLike = leads.find((lead) => /website|web/i.test(String(lead?.lead_source ?? lead?.source ?? "")));
+    const nonCommercialWithComment = leads.find((lead) => {
       const source = String(lead?.lead_source ?? lead?.source ?? "").trim().toLowerCase();
-      const status = String(lead?.lead_status ?? lead?.status ?? "").trim().toLowerCase();
-      return status === "created" && source !== "commercial";
+      const hasCommentField = Object.keys(lead || {}).some((k) => /comment|note|message/i.test(k));
+      return source && source !== "commercial" && hasCommentField;
     });
-
-    const withCommentLikeField = websiteCandidates.find((lead) =>
-      Object.keys(lead || {}).some((k) => /comment|note|message/i.test(k))
-    ) || websiteCandidates[0] || null;
-
-    if (!withCommentLikeField) {
-      return res.status(404).json({ error: "No Created non-Commercial lead found in first 500 leads" });
-    }
-
-    const keys = Object.keys(withCommentLikeField);
-    const commentLike = {};
-    for (const key of keys) {
-      if (/comment|note|message/i.test(key)) commentLike[key] = withCommentLikeField[key];
-    }
+    const anyWithComment = leads.find((lead) => Object.keys(lead || {}).some((k) => /comment|note|message/i.test(k)));
+    const match = websiteLike || nonCommercialWithComment || anyWithComment || null;
 
     return res.status(200).json({
       ok: true,
-      user_id: withCommentLikeField.user_id ?? withCommentLikeField.id ?? null,
-      lead_status: withCommentLikeField.lead_status ?? withCommentLikeField.status ?? null,
-      lead_source: withCommentLikeField.lead_source ?? withCommentLikeField.source ?? null,
-      created_time: withCommentLikeField.created_time ?? withCommentLikeField.created_at ?? null,
-      first_name: withCommentLikeField.first_name ?? null,
-      last_name: withCommentLikeField.last_name ?? null,
-      phone_masked: maskPhone(withCommentLikeField.phone ?? withCommentLikeField.phone_number ?? withCommentLikeField.mobile),
-      email_masked: maskEmail(withCommentLikeField.email),
-      all_keys: keys,
-      comment_like_fields: commentLike
+      total_leads: leads.length,
+      distinct_sources: sources,
+      selected_reason: websiteLike ? "website-like source" : nonCommercialWithComment ? "non-commercial lead with comment-like field" : anyWithComment ? "any lead with comment-like field" : "none",
+      selected: match ? summarize(match) : null,
+      newest_five: leads.slice(0,5).map((lead) => ({
+        user_id: lead?.user_id ?? lead?.id ?? null,
+        lead_status: lead?.lead_status ?? lead?.status ?? null,
+        lead_source: lead?.lead_source ?? lead?.source ?? null,
+        created_time: lead?.created_time ?? lead?.created_at ?? null,
+        comment_like_fields: Object.fromEntries(Object.entries(lead || {}).filter(([k]) => /comment|note|message/i.test(k)))
+      }))
     });
   } catch (error) {
     console.error("debug-arbox-website-lead error", error);
