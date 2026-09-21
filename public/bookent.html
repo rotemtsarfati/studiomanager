@@ -31,7 +31,7 @@ html[data-theme=dark]{--bg:#0e120f;--panel:#171d18;--panel2:#202820;--line:#303a
   </main></div></section>
 </div>
 <script>
-const cfg=window.BOOKENT_CONFIG||{};if(!cfg.supabaseUrl||!cfg.supabaseKey){document.body.innerHTML='<div style="font-family:system-ui;padding:40px">bookent.ai configuration is missing.</div>';throw new Error('Missing config')}
+if(window.location.protocol==='file:'){window.location.replace('https://studiomanager-blush.vercel.app/bookent.html')}const cfg=window.BOOKENT_CONFIG||{};if(!cfg.supabaseUrl||!cfg.supabaseKey){document.body.innerHTML='<div style="font-family:system-ui;padding:40px">bookent.ai configuration is missing.</div>';throw new Error('Missing config')}
 let db=window.supabase.createClient(cfg.supabaseUrl,cfg.supabaseKey),$=id=>document.getElementById(id),views=['landing','authView','onboarding','dashboard'];let authMode='signup',session=null,workspace=null,currentTab='home',allConversations=[];const state={step:0,business:'',goals:[],channels:['WhatsApp'],booking:'',tone:'Warm',rule:''};
 function esc(v){return String(v??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]))}
 function show(id){views.forEach(v=>$(v).classList.toggle('hidden',v!==id));window.scrollTo(0,0)}
