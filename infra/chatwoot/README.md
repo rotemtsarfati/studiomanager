@@ -31,6 +31,22 @@ Expected mapping:
 bookent workspace.id -> messaging_engine_accounts.external_account_id (Chatwoot account id)
 bookent channel connection -> Chatwoot inbox id
 
+## Adapter contract
+
+The browser must never call Chatwoot directly. It calls the bookent.ai backend
+endpoint `POST /api/bookent/messaging/connect`, which authenticates the workspace
+owner and delegates to this engine only after it has been configured.
+
+Set these application-side secrets only when the dedicated host is ready:
+
+- `BOOKENT_MESSAGING_ENGINE_URL` — HTTPS URL of the dedicated engine, for example `https://messages.bookent.ai`
+- `BOOKENT_MESSAGING_ENGINE_API_TOKEN` — server-to-server provisioning token
+- `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` — used by the backend to verify workspace ownership
+
+Until those secrets, the engine host, and provider credentials are present, the
+endpoint intentionally returns `not_configured`. It must never mark WhatsApp,
+Instagram, Messenger, email, or website chat as connected on its own.
+
 ## Production topology
 
 - bookent.ai frontend/API: existing app infrastructure
