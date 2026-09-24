@@ -24,6 +24,13 @@ const ARBOX_LOCATION_ID = "21673";
 const META_GRAPH_VERSION = process.env.META_GRAPH_VERSION || "v25.0";
 const CHATWOOT_BASE_URL = String(process.env.CHATWOOT_BASE_URL || "https://app.chatwoot.com").replace(/\/$/, "");
 
+// bookent.ai uses a separate self-hosted Chatwoot instance as hidden messaging infrastructure.
+// Keep these variables separate from the legacy Be Studios Chatwoot Cloud integration above.
+const BOOKENT_SUPABASE_URL = String(process.env.BOOKENT_SUPABASE_URL || "https://rottozzojimmzbwzunvm.supabase.co").replace(/\/$/, "");
+const BOOKENT_SUPABASE_KEY = String(process.env.BOOKENT_SUPABASE_KEY || "sb_publishable_jcLYddzw-_IVIp1OaFXJMA_3bCuCdqf").trim();
+const BOOKENT_CHATWOOT_BASE_URL = String(process.env.BOOKENT_CHATWOOT_BASE_URL || "").replace(/\/$/, "");
+const BOOKENT_CHATWOOT_PLATFORM_TOKEN = String(process.env.BOOKENT_CHATWOOT_PLATFORM_TOKEN || "").trim();
+
 function cyprusToday() {
   return new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Nicosia", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
 }
@@ -428,6 +435,188 @@ async function sendWhatsAppText({ to, body, phoneNumberId }) {
   if (!response.ok) throw new Error(`WhatsApp send failed: ${response.status} ${JSON.stringify(result)}`);
   return result;
 }
+
+
+function bookentBearer(req) {
+  const value = String(req.get("authorization") || "");
+  return value.toLowerCase().startsWith("bearer ") ? value.slice(7).trim() : "";
+}
+
+async function bookentUser(req) {
+  const token = bookentBearer(req);
+  if (!token) return null;
+  const response = await fetch(`${BOOKENT_SUPABASE_URL}/auth/v1/user`, {
+    headers: {
+      apikey: BOOKENT_SUPABASE_KEY,
+      Authorization: `Bearer ${token}`
+    }
+  });
+  if (!response.ok) return null;
+  const user = await response.json().catch(() => null);
+  return user?.id ? { user, token } : null;
+}
+
+async function bookentRest(pathname, { token, method = "GET", body, prefer } = {}) {
+  const headers = {
+    apikey: BOOKENT_SUPABASE_KEY,
+    Authorization: `Bearer ${token}`,
+    "Content-Type": "application/json"
+  };
+  if (prefer) headers.Prefer = prefer;
+  const response = await fetch(`${BOOKENT_SUPABASE_URL}/rest/v1/${pathname}`, {
+    method,
+    headers,
+    body: body === undefined ? undefined : JSON.stringify(body)
+  });
+  const text = await response.text();
+  let data = null;
+  try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+  if (!response.ok) {
+    const detail = typeof data === "string" ? data : (data?.message || data?.details || JSON.stringify(data || {}));
+    throw new Error(`bookent database request failed: ${response.status} ${detail}`);
+  }
+  return data;
+}
+
+async function requireBookentWorkspaceAdmin(req, workspaceId) {
+  const auth = await bookentUser(req);
+  if (!auth) return { ok: false, status: 401, error: "Please sign in again." };
+  if (!workspaceId) return { ok: false, status: 400, error: "workspace_id is required." };
+  const rows = await bookentRest(
+    `workspace_members?select=role&workspace_id=eq.${encodeURIComponent(workspaceId)}&user_id=eq.${encodeURIComponent(auth.user.id)}&limit=1`,
+    { token: auth.token }
+  );
+  const role = Array.isArray(rows) && rows[0]?.role ? String(rows[0].role) : "";
+  if (!["owner", "admin"].includes(role)) return { ok: false, status: 403, error: "Workspace admin access is required." };
+  return { ok: true, ...auth, role };
+}
+
+function bookentEngineConfigured() {
+  return Boolean(BOOKENT_CHATWOOT_BASE_URL && BOOKENT_CHATWOOT_PLATFORM_TOKEN);
+}
+
+async function bookentChatwootPlatform(pathname, { method = "GET", body } = {}) {
+  if (!bookentEngineConfigured()) throw new Error("The private bookent.ai messaging server is not configured yet.");
+  const response = await fetch(`${BOOKENT_CHATWOOT_BASE_URL}/platform/api/v1/${pathname}`, {
+    method,
+    headers: {
+      api_access_token: BOOKENT_CHATWOOT_PLATFORM_TOKEN,
+      "Content-Type": "application/json",
+      Accept: "application/json"
+    },
+    body: body === undefined ? undefined : JSON.stringify(body)
+  });
+  const text = await response.text();
+  let data = null;
+  try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+  if (!response.ok) {
+    const detail = typeof data === "string" ? data : (data?.message || data?.error || JSON.stringify(data || {}));
+    throw new Error(`Messaging engine request failed: ${response.status} ${detail}`);
+  }
+  return data;
+}
+
+async function ensureBookentMessagingAccount(workspaceId, token) {
+  const existing = await bookentRest(
+    `messaging_engine_accounts?select=id,external_account_id,status&workspace_id=eq.${encodeURIComponent(workspaceId)}&engine=eq.chatwoot&limit=1`,
+    { token }
+  );
+  if (Array.isArray(existing) && existing[0]?.external_account_id) return existing[0];
+
+  const workspaceRows = await bookentRest(
+    `workspaces?select=id,name& id=eq.${encodeURIComponent(workspaceId)}`.replace("?select=id,name& id", "?select=id,name&id"),
+    { token }
+  );
+  const workspaceName = Array.isArray(workspaceRows) && workspaceRows[0]?.name ? String(workspaceRows[0].name) : "bookent.ai workspace";
+  const account = await bookentChatwootPlatform("accounts", {
+    method: "POST",
+    body: { name: workspaceName }
+  });
+  const externalId = String(account?.id || account?.account?.id || "").trim();
+  if (!externalId) throw new Error("The messaging engine did not return an account id.");
+
+  const created = await bookentRest("messaging_engine_accounts?on_conflict=workspace_id,engine", {
+    token,
+    method: "POST",
+    prefer: "resolution=merge-duplicates,return=representation",
+    body: {
+      workspace_id: workspaceId,
+      engine: "chatwoot",
+      external_account_id: externalId,
+      status: "connected",
+      config: {}
+    }
+  });
+  return Array.isArray(created) && created[0] ? created[0] : { external_account_id: externalId, status: "connected" };
+}
+
+app.get("/api/bookent/messaging/status", async (req, res) => {
+  try {
+    const workspaceId = String(req.query?.workspace_id || "").trim();
+    const access = await requireBookentWorkspaceAdmin(req, workspaceId);
+    if (!access.ok) return res.status(access.status).json({ error: access.error });
+
+    let account = null;
+    if (bookentEngineConfigured()) {
+      const rows = await bookentRest(
+        `messaging_engine_accounts?select=id,external_account_id,status&workspace_id=eq.${encodeURIComponent(workspaceId)}&engine=eq.chatwoot&limit=1`,
+        { token: access.token }
+      );
+      account = Array.isArray(rows) ? rows[0] || null : null;
+    }
+    return res.json({
+      engine: "chatwoot",
+      configured: bookentEngineConfigured(),
+      account_provisioned: Boolean(account?.external_account_id),
+      account_status: account?.status || null
+    });
+  } catch (error) {
+    console.error("bookent messaging status error", error);
+    return res.status(500).json({ error: "Could not check the messaging engine.", detail: error.message });
+  }
+});
+
+app.post("/api/bookent/messaging/connect", async (req, res) => {
+  try {
+    const workspaceId = String(req.body?.workspace_id || "").trim();
+    const integrationId = String(req.body?.integration_id || "").trim();
+    const provider = String(req.body?.provider || "").trim();
+    const access = await requireBookentWorkspaceAdmin(req, workspaceId);
+    if (!access.ok) return res.status(access.status).json({ error: access.error });
+    if (!integrationId || !provider) return res.status(400).json({ error: "integration_id and provider are required." });
+
+    if (!bookentEngineConfigured()) {
+      return res.status(503).json({
+        error: "Messaging engine not configured",
+        detail: "The private Chatwoot server still needs a live host plus BOOKENT_CHATWOOT_BASE_URL and BOOKENT_CHATWOOT_PLATFORM_TOKEN."
+      });
+    }
+
+    const account = await ensureBookentMessagingAccount(workspaceId, access.token);
+    await bookentRest(`integrations?id=eq.${encodeURIComponent(integrationId)}&workspace_id=eq.${encodeURIComponent(workspaceId)}`, {
+      token: access.token,
+      method: "PATCH",
+      prefer: "return=minimal",
+      body: {
+        status: "connecting",
+        external_account_id: String(account.external_account_id),
+        last_error: null
+      }
+    });
+
+    return res.json({
+      ok: true,
+      engine: "chatwoot",
+      account_provisioned: true,
+      provider,
+      status: "connecting",
+      message: `${provider} is ready for provider authorization. It is not connected until the provider account and webhook are verified.`
+    });
+  } catch (error) {
+    console.error("bookent messaging connect error", error);
+    return res.status(500).json({ error: "Could not start channel setup.", detail: error.message });
+  }
+});
 
 app.post("/api/chat", async (req, res) => {
   try {
