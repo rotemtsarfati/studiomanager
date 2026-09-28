@@ -1,0 +1,4 @@
+{$CHATWOOT_HOSTNAME} {
+  encode zstd gzip
+  reverse_proxy rails:3000
+}

@@ -63,13 +63,29 @@ Do not run Chatwoot on Vercel. It requires persistent Rails/Sidekiq/PostgreSQL/R
 1. Provision a Linux VM or managed container host with persistent volumes.
 2. Copy `docker-compose.production.yml` and `.env.example` to the host.
 3. Create real `.env` secrets on the server only.
-4. Start Postgres and Redis.
-5. Run Chatwoot database preparation.
-6. Start Rails + Sidekiq.
-7. Put HTTPS reverse proxy in front of port 3000.
+4. Set `CHATWOOT_HOSTNAME=messages.bookent.ai` and point that DNS record to
+   the host before starting Caddy; it obtains and renews TLS automatically.
+5. Start Postgres and Redis.
+6. Run Chatwoot database preparation with
+   `docker compose run --rm rails bundle exec rails db:chatwoot_prepare`.
+7. Start Rails, Sidekiq and Caddy with `docker compose up -d`.
 8. Create one Platform App/API key for the bookent.ai backend.
 9. Store that key server-side only.
 10. Provision one Chatwoot Account automatically per bookent.ai workspace.
+
+The compose file pins the reviewed upstream Community Edition release. See
+`UPSTREAM.md` for its exact source revision and licence notice.
+
+## What is still needed before the Be Studios pilot can connect
+
+1. A persistent Linux host and the `messages.bookent.ai` DNS record.
+2. A Meta developer app configured with the production callback URL on that
+   host, plus the WhatsApp Business Account/number and Instagram/Facebook Page.
+3. Server-only provider secrets and the Chatwoot platform API token stored in
+   the bookent.ai backend environment.
+
+Only after those items are in place should the UI let a studio authorize a
+provider. Until then it must clearly remain disconnected.
 
 ## Product rule
 
