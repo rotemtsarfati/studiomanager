@@ -1,6 +1,6 @@
-# bookent.ai Messaging Engine
+# neua Messaging Engine
 
-bookent.ai uses Chatwoot Community Edition as a self-hosted messaging engine. Chatwoot is infrastructure only; customers use the bookent.ai UI and do not need a Chatwoot Cloud account.
+neua uses Chatwoot Community Edition as a self-hosted messaging engine. Chatwoot is infrastructure only; customers use the neua UI and do not need a Chatwoot Cloud account.
 
 ## Ownership split
 
@@ -22,7 +22,7 @@ bookent.ai owns product intelligence:
 
 ## Multi-tenant mapping
 
-One bookent.ai workspace maps to one Chatwoot account.
+One neua workspace maps to one Chatwoot account.
 
 Supabase stores only the mapping and product-level metadata. Chatwoot message content remains in the self-hosted messaging engine. The normal bookent.ai platform-admin product must not expose customer conversation content.
 
@@ -39,7 +39,7 @@ owner and delegates to this engine only after it has been configured.
 
 Set these application-side secrets only when the dedicated host is ready:
 
-- `BOOKENT_MESSAGING_ENGINE_URL` — HTTPS URL of the dedicated engine, for example `https://messages.bookent.ai`
+- `BOOKENT_MESSAGING_ENGINE_URL` — HTTPS URL of the dedicated engine, for example `https://messages.neua.io`
 - `BOOKENT_MESSAGING_ENGINE_API_TOKEN` — server-to-server provisioning token
 - `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` — used by the backend to verify workspace ownership
 
@@ -54,7 +54,7 @@ Instagram, Messenger, email, or website chat as connected on its own.
 - Messaging Engine: dedicated Docker host
 - Chatwoot PostgreSQL: private to Messaging Engine
 - Redis: private to Messaging Engine
-- public engine hostname: messages.bookent.ai (planned)
+- public engine hostname: messages.neua.io (planned)
 
 Do not run Chatwoot on Vercel. It requires persistent Rails/Sidekiq/PostgreSQL/Redis services.
 
@@ -63,7 +63,7 @@ Do not run Chatwoot on Vercel. It requires persistent Rails/Sidekiq/PostgreSQL/R
 1. Provision a Linux VM or managed container host with persistent volumes.
 2. Copy `docker-compose.production.yml` and `.env.example` to the host.
 3. Create real `.env` secrets on the server only.
-4. Set `CHATWOOT_HOSTNAME=messages.bookent.ai` and point that DNS record to
+4. Set `CHATWOOT_HOSTNAME=messages.neua.io` and point that DNS record to
    the host before starting Caddy; it obtains and renews TLS automatically.
 5. Start Postgres and Redis.
 6. Run Chatwoot database preparation with
@@ -78,7 +78,7 @@ The compose file pins the reviewed upstream Community Edition release. See
 
 ## What is still needed before the Be Studios pilot can connect
 
-1. A persistent Linux host and the `messages.bookent.ai` DNS record.
+1. A persistent Linux host and the `messages.neua.io` DNS record.
 2. A Meta developer app configured with the production callback URL on that
    host, plus the WhatsApp Business Account/number and Instagram/Facebook Page.
 3. Server-only provider secrets and the Chatwoot platform API token stored in

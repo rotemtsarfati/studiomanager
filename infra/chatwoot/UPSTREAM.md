@@ -1,7 +1,7 @@
 # Pinned Chatwoot source
 
-bookent.ai uses the Chatwoot Community Edition source, behind a private
-bookent.ai adapter. This is not a Chatwoot Cloud account.
+neua uses the Chatwoot Community Edition source, behind a private neua
+adapter. This is not a Chatwoot Cloud account.
 
 - Upstream repository: `https://github.com/chatwoot/chatwoot`
 - Reviewed release: `v4.18.0`

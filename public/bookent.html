@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>bookent.ai</title>
+<title>neua</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="/bookent-config.js"></script>
 <style>
@@ -77,6 +77,22 @@ async function beginIntegration(id,provider,category){if(category==='business_sy
 async function removeIntegration(id,provider,category){const button=document.querySelector(`[data-remove-integration="${CSS.escape(id)}"]`);if(button){button.disabled=true;button.textContent='Removing…'}showIntegrationResult('Removing integration','Removing '+provider+' from this workspace…');try{const {error}=await db.from('integrations').delete().eq('id',id).eq('workspace_id',workspace.id);if(error)throw error;if(category==='business_system'){const {data:answer,error:answerError}=await db.from('onboarding_answers').select('answer').eq('workspace_id',workspace.id).eq('question_key','business_system').maybeSingle();if(answerError)throw answerError;if(String(answer?.answer?.value||'')===provider){const {error:clearError}=await db.from('onboarding_answers').upsert({workspace_id:workspace.id,question_key:'business_system',answer:{value:''}},{onConflict:'workspace_id,question_key'});if(clearError)throw clearError}}showIntegrationResult('Integration removed',provider+' has been removed from this workspace.');await Promise.all([loadIntegrations(),loadHomeData(),loadSettings()])}catch(error){if(button){button.disabled=false;button.textContent='Remove'}showIntegrationResult('Could not remove '+provider,error.message||'The integration could not be removed.',true)}}
 async function loadIntegrations(){const {data,error}=await db.from('integrations').select('id,provider,category,status,last_synced_at,last_error').eq('workspace_id',workspace.id).order('category');if(error){showIntegrationResult('Could not load integrations',error.message||'Please refresh and try again.',true);return}$('integrationRows').innerHTML=(data&&data.length)?data.map(i=>`<div class="integrationRow"><div><b>${esc(i.provider)}</b><div class="muted" style="font-size:12px">${esc(i.category==='business_system'?'booking system':'messaging channel')}${i.last_error?' · '+esc(i.last_error):''}</div></div><div class="integrationActions"><span class="badge ${i.status==='connected'?'connected':''}">${esc(i.status)}</span><button class="primary smallBtn" data-connect-id="${esc(i.id)}" data-connect-provider="${esc(i.provider)}" data-connect-category="${esc(i.category)}">${i.category==='business_system'?'Set up':'Connect'}</button><button class="smallBtn" data-integration-guide="${esc(i.provider)}">How to connect</button><button class="smallBtn" data-remove-integration="${esc(i.id)}" data-remove-provider="${esc(i.provider)}" data-remove-category="${esc(i.category)}">Remove</button></div></div>`).join(''):'<div class="muted">No integrations yet. Add a messaging channel or booking system to get started.</div>';document.querySelectorAll('[data-integration-guide]').forEach(button=>button.onclick=()=>showConnectionGuide(button.dataset.integrationGuide));document.querySelectorAll('[data-connect-id]').forEach(button=>button.onclick=()=>beginIntegration(button.dataset.connectId,button.dataset.connectProvider,button.dataset.connectCategory));document.querySelectorAll('[data-remove-integration]').forEach(button=>button.onclick=()=>removeIntegration(button.dataset.removeIntegration,button.dataset.removeProvider,button.dataset.removeCategory))}
 $('signOutBtn').onclick=async()=>{await db.auth.signOut();session=null;workspace=null;$('accountBtn').classList.add('hidden');show('landing')};$('accountBtn').onclick=()=>show('dashboard');loadApp();
+</script>
+<script>
+// Keep the existing internal route and storage names stable while the customer-facing
+// product name transitions from bookent.ai to neua.
+(() => {
+  const replaceBrand = (node) => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      if (!node.parentElement?.closest('script,style')) node.nodeValue = node.nodeValue.replaceAll('bookent.ai', 'neua.io');
+      return;
+    }
+    for (const child of node.childNodes || []) replaceBrand(child);
+  };
+  replaceBrand(document.body);
+  new MutationObserver((records) => records.forEach((record) => record.addedNodes.forEach(replaceBrand)))
+    .observe(document.body, { childList: true, subtree: true });
+})();
 </script>
 </body>
 </html>

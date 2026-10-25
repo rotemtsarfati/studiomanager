@@ -24,7 +24,7 @@ const ARBOX_LOCATION_ID = "21673";
 const META_GRAPH_VERSION = process.env.META_GRAPH_VERSION || "v25.0";
 const CHATWOOT_BASE_URL = String(process.env.CHATWOOT_BASE_URL || "https://app.chatwoot.com").replace(/\/$/, "");
 
-// bookent.ai uses a separate self-hosted Chatwoot instance as hidden messaging infrastructure.
+// neua uses a separate self-hosted Chatwoot instance as hidden messaging infrastructure.
 // Keep these variables separate from the legacy Be Studios Chatwoot Cloud integration above.
 const BOOKENT_SUPABASE_URL = String(process.env.BOOKENT_SUPABASE_URL || "https://rottozzojimmzbwzunvm.supabase.co").replace(/\/$/, "");
 const BOOKENT_SUPABASE_KEY = String(process.env.BOOKENT_SUPABASE_KEY || "sb_publishable_jcLYddzw-_IVIp1OaFXJMA_3bCuCdqf").trim();
@@ -496,7 +496,7 @@ function bookentEngineConfigured() {
 }
 
 async function bookentChatwootPlatform(pathname, { method = "GET", body } = {}) {
-  if (!bookentEngineConfigured()) throw new Error("The private bookent.ai messaging server is not configured yet.");
+  if (!bookentEngineConfigured()) throw new Error("The private neua messaging server is not configured yet.");
   const response = await fetch(`${BOOKENT_CHATWOOT_BASE_URL}/platform/api/v1/${pathname}`, {
     method,
     headers: {
@@ -527,7 +527,7 @@ async function ensureBookentMessagingAccount(workspaceId, token) {
     `workspaces?select=id,name& id=eq.${encodeURIComponent(workspaceId)}`.replace("?select=id,name& id", "?select=id,name&id"),
     { token }
   );
-  const workspaceName = Array.isArray(workspaceRows) && workspaceRows[0]?.name ? String(workspaceRows[0].name) : "bookent.ai workspace";
+  const workspaceName = Array.isArray(workspaceRows) && workspaceRows[0]?.name ? String(workspaceRows[0].name) : "neua workspace";
   const account = await bookentChatwootPlatform("accounts", {
     method: "POST",
     body: { name: workspaceName }
