@@ -1,1 +1,0 @@
-window.BOOKENT_CONFIG={supabaseUrl:'https://rottozzojimmzbwzunvm.supabase.co',supabaseKey:['sb','_publishable_','jcLYddzw-_IVIp1OaFXJMA_3bCuCdqf'].join('')};

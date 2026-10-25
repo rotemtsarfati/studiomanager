@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>neua</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="/bookent-config.js"></script>
+<script src="/neua-config.js"></script>
 <style>
 :root{--bg:#f7f3ed;--panel:#fffdfa;--panel2:#efe7dd;--line:#ddd3c8;--text:#20241f;--muted:#77766f;--sage:#789079;--sage2:#a8b9a6;--terracotta:#c9785c;--terracotta2:#e4a58e;--shadow:0 18px 60px rgba(74,62,48,.08);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
 html[data-theme=dark]{--bg:#0e120f;--panel:#171d18;--panel2:#202820;--line:#303a31;--text:#f6f1ea;--muted:#a4ada4;--sage:#9eb39d;--sage2:#bed0bc;--terracotta:#d4886d;--terracotta2:#e1a18a;--shadow:0 20px 60px rgba(0,0,0,.28)}
@@ -31,7 +31,7 @@ html[data-theme=dark]{--bg:#0e120f;--panel:#171d18;--panel2:#202820;--line:#303a
   </main></div></section>
 </div>
 <script>
-if(window.location.protocol==='file:'){window.location.replace('https://studiomanager-blush.vercel.app/bookent.html')}const cfg=window.BOOKENT_CONFIG||{};if(!cfg.supabaseUrl||!cfg.supabaseKey){document.body.innerHTML='<div style="font-family:system-ui;padding:40px">bookent.ai configuration is missing.</div>';throw new Error('Missing config')}
+if(window.location.protocol==='file:'){window.location.replace('https://studiomanager-blush.vercel.app/neua.html')}const cfg=window.NEUA_CONFIG||{};if(!cfg.supabaseUrl||!cfg.supabaseKey){document.body.innerHTML='<div style="font-family:system-ui;padding:40px">neua configuration is missing.</div>';throw new Error('Missing config')}
 let db=window.supabase.createClient(cfg.supabaseUrl,cfg.supabaseKey),$=id=>document.getElementById(id),views=['landing','authView','onboarding','dashboard'];let authMode='signup',session=null,workspace=null,currentTab='home',allConversations=[];const state={step:0,business:'',goals:[],channels:['WhatsApp'],booking:'',tone:'Warm',rule:''};let activeFaqQuestion='';const FAQ_TEMPLATES={
 'Fitness / Studio':['What types of classes do you offer?','Who are the classes suitable for?','Are the classes suitable for beginners?','What are your opening hours?','How do I book a class?','What is your cancellation policy?','What should I bring to my first class?','Do you offer private sessions?'],
 'Nails / Beauty':['What treatments do you offer?','What are your opening hours?','How long does each treatment take?','How do I book an appointment?','What is your cancellation policy?','Do you accept walk-ins?','How should I prepare before my appointment?','Which treatment should I choose?'],
@@ -43,7 +43,7 @@ function show(id){views.forEach(v=>$(v).classList.toggle('hidden',v!==id));windo
 function setTheme(t){document.documentElement.dataset.theme=t;localStorage.setItem('bookent-theme',t);$('themeBtn').textContent=t==='dark'?'☀ Light':'☾ Dark'}setTheme(localStorage.getItem('bookent-theme')||'light');$('themeBtn').onclick=()=>setTheme(document.documentElement.dataset.theme==='dark'?'light':'dark');
 function setAuthMode(mode){authMode=mode;const s=mode==='signup';$('authEyebrow').textContent=s?'Create account':'Welcome back';$('authTitle').textContent=s?'Start building your Agent':'Sign in to bookent.ai';$('authSub').textContent=s?'Your workspace will be private to your business.':'Continue where you left off.';$('nameWrap').classList.toggle('hidden',!s);$('authSubmit').textContent=s?'Create account':'Sign in';$('authSwitch').textContent=s?'I already have an account':'Create a new account';$('authStatus').textContent=''}
 $('getStarted').onclick=()=>{setAuthMode('signup');show('authView')};$('signInBtn').onclick=()=>{setAuthMode('signin');show('authView')};$('authSwitch').onclick=()=>setAuthMode(authMode==='signup'?'signin':'signup');
-$('authSubmit').onclick=async()=>{const email=$('email').value.trim(),password=$('password').value,name=$('name').value.trim();$('authStatus').className='status';$('authStatus').textContent='Working…';try{if(!email||!password)throw new Error('Please enter email and password.');if(authMode==='signup'){const {data,error}=await db.auth.signUp({email,password,options:{emailRedirectTo:`${window.location.origin}/bookent.html`,data:{display_name:name||email.split('@')[0]}}});if(error)throw error;if(!data.session){$('authStatus').className='status ok';$('authStatus').textContent='Account created. Check your email to confirm it, then come back and sign in.';return}}else{const {error}=await db.auth.signInWithPassword({email,password});if(error)throw error}await loadApp()}catch(e){$('authStatus').className='status error';$('authStatus').textContent=e.message||'Could not continue.'}};
+$('authSubmit').onclick=async()=>{const email=$('email').value.trim(),password=$('password').value,name=$('name').value.trim();$('authStatus').className='status';$('authStatus').textContent='Working…';try{if(!email||!password)throw new Error('Please enter email and password.');if(authMode==='signup'){const {data,error}=await db.auth.signUp({email,password,options:{emailRedirectTo:`${window.location.origin}/neua.html`,data:{display_name:name||email.split('@')[0]}}});if(error)throw error;if(!data.session){$('authStatus').className='status ok';$('authStatus').textContent='Account created. Check your email to confirm it, then come back and sign in.';return}}else{const {error}=await db.auth.signInWithPassword({email,password});if(error)throw error}await loadApp()}catch(e){$('authStatus').className='status error';$('authStatus').textContent=e.message||'Could not continue.'}};
 async function loadApp(){const {data:{session:s}}=await db.auth.getSession();if(!s){session=null;show('landing');return}const {data:{user},error:userError}=await db.auth.getUser();if(userError||!user){session=null;show('landing');return}session={...s,user};db=window.supabase.createClient(cfg.supabaseUrl,cfg.supabaseKey,{global:{headers:{Authorization:`Bearer ${session.access_token}`}}});$('accountBtn').classList.remove('hidden');$('accountBtn').textContent=session.user.email;const {data:members,error}=await db.from('workspace_members').select('workspace_id,role,workspaces(*)').eq('user_id',session.user.id).limit(1);if(error)console.error(error);if(members&&members.length){workspace=members[0].workspaces;await loadDashboard()}else{state.step=0;renderStep();show('onboarding')}}
 function progress(){let h='';for(let i=0;i<5;i++)h+=`<i class="${i<=state.step?'on':''}"></i>`;$('progress').innerHTML=h;$('stepLabel').textContent=`Step ${state.step+1} of 5`}
 function opt(n,e,sel,a){return `<button class="option ${sel?'selected':''}" ${a}><div class="emoji">${e}</div><b>${n}</b></button>`}
@@ -80,8 +80,9 @@ $('signOutBtn').onclick=async()=>{await db.auth.signOut();session=null;workspace
 </script>
 <script>
 // Keep the existing internal route and storage names stable while the customer-facing
-// product name transitions from bookent.ai to neua.
+// product name is Neua.
 (() => {
+  const replaceBrandElements = (root) => root.querySelectorAll?.('.brand').forEach((element) => { element.textContent = 'neua'; });
   const replaceBrand = (node) => {
     if (node.nodeType === Node.TEXT_NODE) {
       if (!node.parentElement?.closest('script,style')) node.nodeValue = node.nodeValue.replaceAll('bookent.ai', 'neua.io');
@@ -89,8 +90,12 @@ $('signOutBtn').onclick=async()=>{await db.auth.signOut();session=null;workspace
     }
     for (const child of node.childNodes || []) replaceBrand(child);
   };
+  replaceBrandElements(document);
   replaceBrand(document.body);
-  new MutationObserver((records) => records.forEach((record) => record.addedNodes.forEach(replaceBrand)))
+  new MutationObserver((records) => records.forEach((record) => record.addedNodes.forEach((node) => {
+    replaceBrandElements(node);
+    replaceBrand(node);
+  })))
     .observe(document.body, { childList: true, subtree: true });
 })();
 </script>

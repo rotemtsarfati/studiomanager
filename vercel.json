@@ -1,0 +1,9 @@
+{
+  "redirects": [
+    {
+      "source": "/bookent.html",
+      "destination": "/neua.html",
+      "permanent": true
+    }
+  ]
+}
